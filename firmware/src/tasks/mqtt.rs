@@ -4,12 +4,10 @@ use dashboard_core::{
     model::Update,
     routing::{LIVE_SUBSCRIPTIONS, decode_update},
 };
-use embassy_executor::task;
 use embassy_futures::select::{Either, select};
 use embassy_net::{Stack, tcp::TcpSocket};
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
 use embassy_time::{Duration, Ticker, Timer, with_timeout};
-use esp_println::println;
 use rust_mqtt::{
     buffer::BumpBuffer,
     client::{
@@ -23,6 +21,17 @@ use rust_mqtt::{
 };
 
 use crate::config;
+
+macro_rules! mqtt_log {
+    ($($arg:tt)*) => {
+        {
+            #[cfg(target_arch = "xtensa")]
+            esp_println::println!($($arg)*);
+            #[cfg(not(target_arch = "xtensa"))]
+            log::info!($($arg)*);
+        }
+    };
+}
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const SOCKET_TIMEOUT: Duration = Duration::from_secs(30);
@@ -67,13 +76,18 @@ type MqttClient<'a> = Client<
 >;
 type MqttSession = Session<RECEIVE_MAXIMUM, SEND_MAXIMUM>;
 
-#[task]
+#[cfg(target_arch = "xtensa")]
+#[embassy_executor::task]
 pub async fn task(stack: Stack<'static>, buffers: &'static mut Buffers) {
+    run(stack, buffers).await;
+}
+
+pub async fn run(stack: Stack<'static>, buffers: &'static mut Buffers) {
     let mut session = MqttSession::default();
 
     loop {
         stack.wait_config_up().await;
-        println!(
+        mqtt_log!(
             "mqtt: connecting to {}:{}",
             config::MQTT_BROKER_ADDRESS,
             config::MQTT_PORT
@@ -90,14 +104,14 @@ pub async fn task(stack: Stack<'static>, buffers: &'static mut Buffers) {
         )
         .await
         {
-            Ok(Ok(())) => println!("mqtt: TCP connected"),
+            Ok(Ok(())) => mqtt_log!("mqtt: TCP connected"),
             Ok(Err(error)) => {
-                println!("mqtt: TCP connection failed: {:?}", error);
+                mqtt_log!("mqtt: TCP connection failed: {:?}", error);
                 Timer::after(RECONNECT_DELAY).await;
                 continue;
             }
             Err(_) => {
-                println!("mqtt: TCP connection timed out");
+                mqtt_log!("mqtt: TCP connection timed out");
                 Timer::after(RECONNECT_DELAY).await;
                 continue;
             }
@@ -129,13 +143,13 @@ pub async fn task(stack: Stack<'static>, buffers: &'static mut Buffers) {
         {
             Ok(Ok(info)) => info.session_present,
             Ok(Err(error)) => {
-                println!("mqtt: handshake failed: {:?}", error);
+                mqtt_log!("mqtt: handshake failed: {:?}", error);
                 session = client.session().clone();
                 Timer::after(RECONNECT_DELAY).await;
                 continue;
             }
             Err(_) => {
-                println!("mqtt: handshake timed out");
+                mqtt_log!("mqtt: handshake timed out");
                 session = client.session().clone();
                 Timer::after(RECONNECT_DELAY).await;
                 continue;
@@ -147,12 +161,12 @@ pub async fn task(stack: Stack<'static>, buffers: &'static mut Buffers) {
 
         match run_session(&mut client, session_present).await {
             Ok(never) => match never {},
-            Err(error) => println!("mqtt: session failed: {:?}", error),
+            Err(error) => mqtt_log!("mqtt: session failed: {:?}", error),
         }
 
         client.abort().await;
         session = client.session().clone();
-        println!("mqtt: reconnecting in {}s", RECONNECT_DELAY.as_secs());
+        mqtt_log!("mqtt: reconnecting in {}s", RECONNECT_DELAY.as_secs());
         Timer::after(RECONNECT_DELAY).await;
     }
 }
@@ -165,7 +179,7 @@ async fn run_session<'a>(
         subscribe(client, topic).await?;
     }
 
-    println!(
+    mqtt_log!(
         "mqtt: subscribed to {} live filters (session_present={})",
         LIVE_SUBSCRIPTIONS.len(),
         session_present
@@ -206,9 +220,10 @@ async fn subscribe<'a>(
         let update = match event {
             Event::Suback(ack) if ack.packet_identifier == packet_identifier => {
                 if ack.reason_code != ReasonCode::GrantedQoS2 {
-                    println!(
+                    mqtt_log!(
                         "mqtt: broker rejected QoS 2 subscription to {}: {:?}",
-                        topic, ack.reason_code
+                        topic,
+                        ack.reason_code
                     );
                     return Err(MqttError::Server);
                 }
@@ -225,7 +240,7 @@ async fn subscribe<'a>(
             UPDATES.send(update).await;
         }
         if acknowledged {
-            println!("mqtt: subscribed {}", topic);
+            mqtt_log!("mqtt: subscribed {}", topic);
             return Ok(());
         }
     }
@@ -240,7 +255,7 @@ fn decode_event(event: Event<'_, MAX_SUBSCRIPTION_IDENTIFIERS>) -> Option<Update
     match decode_update(topic, publication.message.as_bytes()) {
         Ok(update) => Some(update),
         Err(error) => {
-            println!("mqtt: rejected payload on {}: {:?}", topic, error);
+            mqtt_log!("mqtt: rejected payload on {}: {:?}", topic, error);
             None
         }
     }

@@ -16,7 +16,7 @@ See [`PORTING_PLAN.md`](PORTING_PLAN.md) for the remaining clock, retained-summa
 | D/C / CS / RESET | GPIO5 / GPIO40 / GPIO41 |
 | TE | GPIO6, intentionally unused |
 
-The host simulator renders the same deterministic dashboard fixture used by `inkytool test` in `../inky-solar`. The firmware starts with an empty dashboard, preserves the most recently received state across network outages, and redraws immediately after each valid MQTT update. The status-bar date remains a temporary monotonic fixture until RTC/SNTP support is added.
+The host simulator tests against the same deterministic dashboard fixture used by `inkytool test` in `../inky-solar`. Its live mode starts with an empty dashboard, preserves the most recently received state across network outages, and redraws immediately after each valid MQTT update, just like the firmware. The status-bar date remains a temporary monotonic fixture until RTC/SNTP support is added.
 
 The serial console logs display startup, Wi-Fi connection and reconnect state, the DHCP address, MQTT connection/subscription state, payload rejection details, display updates, and `heartbeat: dashboard displayed` every five seconds.
 
@@ -36,7 +36,7 @@ secretspec set --provider keyring MQTT_PASSWORD
 
 Each command prompts for its value. `devenv` resolves the `default` Secretspec profile and exports the values while compiling. The firmware uses `env!`, so all three credentials are embedded in the flashed binary; anyone able to read the firmware image may recover them. They are never printed by the firmware.
 
-The non-secret MQTT defaults in `firmware/src/config.rs` preserve the existing deployment contract: broker `192.168.1.13:1883`, username `iot`, client ID `inkydisplay`, MQTT v5, and a 180-second keepalive. Port 1883 is unencrypted, so credentials and telemetry are exposed to observers on the local network.
+The non-secret MQTT defaults in `firmware/src/config.rs` preserve the existing deployment contract: broker `192.168.1.13:1883`, username `iot`, client ID `energydisplay`, MQTT v5, and a 180-second keepalive. Port 1883 is unencrypted, so credentials and telemetry are exposed to observers on the local network.
 
 Enter the environment:
 
@@ -50,7 +50,7 @@ Or run the checked-in tasks directly:
 |---|---|
 | `just build` | Build the optimized release firmware |
 | `just test` | Validate firmware and test the dashboard core and simulator |
-| `just sim` | Show the firmware renderer in a local window |
+| `just sim` | Configure TAP/NAT with `sudo` and run the live simulator |
 
 | Command | Purpose |
 |---|---|
@@ -61,24 +61,30 @@ Or run the checked-in tasks directly:
 | `just flash` | Build and flash without opening a monitor |
 | `just monitor` | Open the interactive serial monitor |
 | `just firmware-lock` | Refresh `Cargo.lock` after dependency changes |
-| `just sim` | Show the firmware renderer in a local window |
-| `just simulator-check` | Build and test the native simulator |
+| `just sim` | Configure TAP/NAT with `sudo` and run the live simulator |
+| `just simulator-tap-up` | Create the TAP device and restricted MQTT forwarding rules |
+| `just simulator-tap-down` | Remove the TAP device and forwarding rules |
+| `just simulator-run` | Run against an already configured `tap-energy` device |
+| `just simulator-check` | Build and test the native simulator without TAP or root |
 
 Do not run an ambient `cargo` directly; it may select the wrong compiler because ESP32-S3 requires Espressif's Xtensa Rust toolchain.
 
 ## Local simulator
 
-Run the display renderer without connecting a board:
+Run the live firmware application without connecting a board:
 
 ```sh
+devenv shell
 just sim
 ```
 
-Run `devenv shell` first; it provisions and activates the pinned Espressif toolchain automatically, then use the `just` commands above.
+`just sim` asks for `sudo` to create `tap-energy`, gives the invoking user access to it, assigns the host gateway `192.168.69.1/24`, enables IPv4 forwarding, and installs narrowly scoped NAT/firewall rules allowing guest `192.168.69.2` to reach only MQTT at `192.168.1.13:1883`. Cargo and the SDL window run as the normal user. Closing the window or pressing Escape removes the TAP device and those firewall rules. The recipe leaves the system-wide `net.ipv4.ip_forward` setting enabled because it cannot safely know whether another service already depended on it.
 
-The simulator opens a 2x-scale window with the same deterministic 400x300 Advanced dashboard frame produced by the firmware. Close the window or press Escape to stop it. The simulator builds for the development machine while the normal firmware tasks continue to build for ESP32-S3.
+For manual lifecycle control, use `just simulator-tap-up`, `just simulator-run`, and `just simulator-tap-down`. The teardown recipe is idempotent. `just simulator-check` remains non-privileged and does not open TAP or SDL.
 
-This is a display-level simulator rather than an ESP32 instruction emulator. It executes the exact shared `embedded-graphics` drawing code, but does not emulate SPI, the ST7305 controller initialization, Embassy timing, or other peripherals.
+The simulator opens a 2x-scale 400x300 Advanced dashboard, connects to the real broker with the embedded Secretspec MQTT password, subscribes through the same bounded `rust-mqtt` v5 session code, applies the same typed updates, and runs the same persistent renderer under Embassy's host executor. It intentionally uses the same MQTT client ID as firmware, so do not run the board and simulator simultaneously unless the broker is configured to tolerate that collision.
+
+This is a host-driver substitution rather than an ESP32 instruction emulator. Linux TAP replaces the ESP Wi-Fi link driver, while `embassy-net`, Embassy timing/tasks, MQTT parsing, bounded update channel, dashboard state, and `embedded-graphics` renderer are shared with firmware. It does not emulate Wi-Fi association, SPI, or ST7305 controller initialization.
 
 ## Flash and hardware check
 

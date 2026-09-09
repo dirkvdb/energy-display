@@ -36,6 +36,8 @@ in
     espflash
     espup
     git
+    iproute2
+    iptables
     just
     material-design-icons
     pkg-config

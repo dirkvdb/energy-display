@@ -144,7 +144,6 @@ async fn main(spawner: Spawner) -> ! {
                 display::clear_white(&mut panel);
                 renderer.render(&mut panel, &dashboard.status, now).unwrap();
                 panel.flush().unwrap();
-                println!("display: dashboard updated");
             }
             Either::Second(_) => println!("heartbeat: dashboard displayed"),
         }

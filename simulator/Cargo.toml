@@ -6,7 +6,15 @@ rust-version = "1.95"
 publish = false
 
 [dependencies]
+critical-section = { version = "=1.2.0", features = ["std"] }
 dashboard-core = { path = "../crates/dashboard-core" }
+embassy-executor = { version = "=0.10.0", features = ["platform-std", "executor-thread", "log"] }
+embassy-net = { version = "=0.9.1", features = ["medium-ethernet", "proto-ipv4", "std", "tcp"] }
+embassy-net-tuntap = "=0.1.1"
+embassy-time = { version = "=0.5.1", features = ["log", "std"] }
 embedded-graphics = "=0.8.2"
 embedded-graphics-simulator = "=0.8.0"
 energydisplay-firmware = { path = "../firmware" }
+env_logger = "=0.11.8"
+log = "=0.4.34"
+static_cell = "=2.1.1"
