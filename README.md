@@ -2,7 +2,7 @@
 
 Bare-metal Rust port of `../inky-solar` for the Waveshare ESP32-S3-RLCD-4.2. Board support is validated, and the firmware now renders the source application's Advanced dashboard from a shared `no_std` model and renderer.
 
-See [`PORTING_PLAN.md`](PORTING_PLAN.md) for the remaining network, clock, font-parity, and integration work.
+See [`PORTING_PLAN.md`](PORTING_PLAN.md) for the remaining network, clock, and integration work.
 
 ## Current hardware target
 
@@ -85,7 +85,7 @@ Acceptance checks:
 4. The complete outer border is visible and stable.
 5. `heartbeat: dashboard displayed` appears every five seconds.
 
-The renderer currently uses allocation-free built-in bitmap text and locally drawn monochrome icons. Layout, formatting, graph calculations, state derivation, and polarity are ported, but pixel-identical Bitter Pro and Font Awesome rendering is still pending. The Font Awesome asset in the source tree is a Pro font without a checked-in redistribution license, so it has not been copied into this repository.
+Text rendering now matches the source path: the OFL-licensed Bitter Pro Black font is embedded in flash and shaped/rasterized at runtime by `cosmic-text` 0.19 with its `no_std` and `swash` features. The renderer preserves the source font sizes, advanced shaping, `alpha > 127` monochrome threshold, alignment, and ink-bound vertical centering. The source Font Awesome asset is a Pro font without a checked-in redistribution license, so it is not copied. Instead, `devenv.nix` takes the Apache-2.0 `material-design-icons` font from Nixpkgs and subsets it to the five required glyphs. The grid, solar, heating, shower, and center backup-heater icons use `lightning-bolt`, `solar-power-variant-outline`, `heating-coil`, `shower-head`, and `recycle-variant`, respectively. The small derived font is embedded in the firmware; the remaining monochrome symbols continue to use the existing local geometry.
 
 If the panel remains blank or is unstable, keep SPI at 10 MHz and compare the initialization sequence with `.board-reference` before changing frequencies. The pinned `st7305` crate intentionally gets tested unchanged first; the vendor example includes an additional gate-timing command (`0x62`) that may require an upstream driver fix if hardware proves it necessary.
 
@@ -94,6 +94,7 @@ If the panel remains blank or is unstable, keep SPI at 10 MHz and compare the in
 ```text
 .
 ├── .cargo/config.toml       # Xtensa target, linker flags, espflash runner
+├── assets/fonts/            # Font assets and third-party license notices
 ├── crates/
 │   └── dashboard-core/      # no_std model, MQTT decoding, formatting, renderer
 ├── firmware/

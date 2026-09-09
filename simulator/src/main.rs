@@ -46,6 +46,26 @@ mod tests {
         assert_eq!(display.get_pixel(Point::new(199, 50)), WHITE);
         assert_eq!(display.get_pixel(Point::new(100, 147)), BLACK);
         assert_eq!(display.get_pixel(Point::new(201, 170)), BLACK);
+
+        assert!(pixel_count(&display, Point::new(2, 2), Size::new(72, 72), WHITE) > 20);
+        assert!(pixel_count(&display, Point::new(202, 2), Size::new(70, 72), WHITE) > 20);
+        assert!(pixel_count(&display, Point::new(115, 231), Size::new(30, 30), WHITE) > 20);
+        assert!(pixel_count(&display, Point::new(294, 224), Size::new(24, 35), BLACK) > 20);
+        assert!(pixel_count(&display, Point::new(294, 261), Size::new(24, 36), BLACK) > 20);
+    }
+
+    fn pixel_count(
+        display: &SimulatorDisplay<BinaryColor>,
+        top_left: Point,
+        size: Size,
+        color: BinaryColor,
+    ) -> usize {
+        (top_left.y..top_left.y + size.height as i32)
+            .flat_map(|y| {
+                (top_left.x..top_left.x + size.width as i32).map(move |x| Point::new(x, y))
+            })
+            .filter(|point| display.get_pixel(*point) == color)
+            .count()
     }
 
     #[test]

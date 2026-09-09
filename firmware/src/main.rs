@@ -27,6 +27,8 @@ async fn main(_spawner: Spawner) {
     println!("energydisplay board-support firmware starting");
 
     let peripherals = esp_hal::init(esp_hal::Config::default());
+    esp_alloc::heap_allocator!(size: board::FONT_HEAP_SIZE);
+
     let timer_group = TimerGroup::new(peripherals.TIMG0);
     esp_rtos::start(timer_group.timer0, peripherals.FROM_CPU_INTR0);
 

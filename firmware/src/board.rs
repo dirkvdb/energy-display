@@ -14,4 +14,7 @@ pub const DISPLAY_CS_GPIO: u8 = 40;
 pub const DISPLAY_RESET_GPIO: u8 = 41;
 pub const DISPLAY_TE_GPIO: u8 = 6;
 
+/// Internal RAM reserved for `cosmic-text` shaping and glyph caches.
+pub const FONT_HEAP_SIZE: usize = 256 * 1024;
+
 pub const HEARTBEAT_INTERVAL_SECS: u64 = 5;

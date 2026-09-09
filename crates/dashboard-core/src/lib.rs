@@ -1,5 +1,8 @@
 #![no_std]
 
+extern crate alloc;
+
+mod font;
 pub mod formatting;
 pub mod model;
 pub mod renderer;

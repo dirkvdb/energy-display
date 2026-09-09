@@ -25,7 +25,7 @@ Implementation starts with hardware proof, before source fixtures, networking, o
 
 The workspace now includes `crates/dashboard-core`, a `no_std` implementation of the active model, exact live MQTT topic/payload decoding, corrected explicit-time hourly aggregation, allocation-free formatting, and the complete Advanced dashboard geometry/graph. Both the simulator and firmware render the source `inkytool test` fixture through this shared code.
 
-Strict font parity is still open: the current renderer uses built-in bitmap text and geometric monochrome icons. The source's Font Awesome Pro asset was not copied because its redistribution terms are not documented in the source checkout. Networking, live wall time, retained summary handling, and app-task integration remain later milestones.
+Bitter Pro Black parity is complete: the shared renderer uses `cosmic-text` 0.19 in `no_std + alloc` mode with the source font sizes, advanced shaping, monochrome threshold, alignment, and ink-bound vertical centering. The source's Font Awesome Pro asset was not copied because its redistribution terms are not documented in the source checkout. The grid, solar, heating, shower, and center backup-heater symbols use the Apache-2.0 Material Design Icons `lightning-bolt`, `solar-power-variant-outline`, `heating-coil`, `shower-head`, and `recycle-variant` glyphs, subset from the Nixpkgs font during environment construction; other monochrome symbols retain their local geometry. Networking, live wall time, retained summary handling, and app-task integration remain later milestones.
 
 ### Deliverables
 
@@ -70,7 +70,7 @@ The production path in `../inky-solar` consists of:
 - `src/output.rs` and `inky-what/`: Raspberry Pi/e-paper output;
 - `src/structured_log.rs`: optional host-side network logging.
 
-The reusable parts are the wire schemas, topic routing, state calculations, formatting rules, layout geometry, graph calculations, and icon choices. Tokio, `rumqttc`, `chrono::Local`, `cosmic-text`, `anyhow`, CLI parsing, Linux logging, and the Inky driver must be replaced.
+The reusable parts are the wire schemas, topic routing, state calculations, formatting rules, layout geometry, graph calculations, icon choices, and `cosmic-text` font pipeline. `cosmic-text` is reused with its `no_std` and `swash` features; Tokio, `rumqttc`, `chrono::Local`, `anyhow`, CLI parsing, Linux logging, and the Inky driver must be replaced.
 
 ### Target hardware
 
@@ -129,7 +129,7 @@ Use `display-interface-spi` if it composes cleanly with the selected `esp-hal` S
 1. Raspberry Pi/Linux startup with ESP32-S3 initialization.
 2. Tokio tasks and signals with Embassy tasks, channels, signals, and timers.
 3. `rumqttc` with a bounded `no_std` MQTT client over `embassy-net`.
-4. Runtime OTF shaping with generated 1-bit proportional glyph assets.
+4. The host `cosmic-text` configuration with its `no_std + alloc + swash` configuration while preserving runtime OTF shaping and monochrome rasterization.
 5. `chrono::Local` with RTC/SNTP-backed wall time and explicit local-time conversion.
 6. E-paper output and refresh policy with direct ST7305 GRAM writes.
 7. CLI/environment configuration with embedded configuration/provisioning.
@@ -158,11 +158,8 @@ energydisplay/
 │   └── dashboard-core/           # no_std model, routing, aggregation, renderer
 ├── firmware/                     # ESP32-S3 Embassy binary and display adapter
 ├── simulator/                    # std host preview and golden-image harness
-├── tools/
-│   └── fontgen/                  # host-only OTF subset/raster generator
 ├── assets/
-│   ├── fonts/                    # subject to existing font licences
-│   └── generated/                # packed glyphs and metadata
+│   └── fonts/                    # Font assets and third-party license notices
 └── tests/
     └── fixtures/                 # MQTT JSON and expected summaries/images
 ```
@@ -258,7 +255,7 @@ Use the M0 bordered text frame as the first hardware bring-up image and test the
 
 **Exit criterion:** the pinned crate passes adapter/packing tests and the physical panel shows the stable M0 text frame plus a correctly oriented 400×300 test pattern.
 
-### Step 4 — Port the renderer without `std` or allocation
+### Step 4 — Port the renderer without `std`
 
 1. Move only the active advanced renderer into `dashboard-core`.
 2. Make rendering accept:
@@ -274,22 +271,18 @@ Use the M0 bordered text frame as the first hardware bring-up image and test the
 
 #### Font and icon conversion
 
-The source uses proportional Bitter Pro Black text and Font Awesome Pro icons through `cosmic-text`; built-in monospaced fonts will not produce an identical layout.
+The source uses proportional Bitter Pro Black text and Font Awesome Pro icons through `cosmic-text`; built-in monospaced fonts do not produce an equivalent layout.
 
-1. Inventory every glyph used by numeric values, Dutch dates, units, arrows, punctuation, `COP`, and icons.
-2. Build a host-only `fontgen` tool using the same source fonts and compatible raster metrics.
-3. Rasterize only the required sizes:
-   - 43 px main values;
-   - 32 px split values;
-   - 23 px subtext;
-   - 18 px status text;
-   - 45 px icons;
-   - any smaller mixed/icon size proven necessary by fixtures.
-4. Store packed 1-bit glyph bitmaps plus advance, bearing, and bounds metadata in flash.
-5. Implement a small proportional text renderer supporting left, center, right alignment and mixed text/icon runs.
-6. Confirm the right to use and redistribute the existing Font Awesome Pro asset or generated derivative. If that is not permitted, approve a visually different open icon set before implementation.
+**Implemented:**
 
-**Exit criterion:** host-rendered normal and split dashboards match the thresholded source golden images pixel-for-pixel, or all documented differences have been explicitly accepted.
+1. Embed the OFL-licensed Bitter Pro Black OTF in flash.
+2. Reuse `cosmic-text` 0.19 with `default-features = false` and features `no_std` and `swash`, rather than maintaining a custom font generator or bitmap renderer.
+3. Preserve the source's advanced shaping and sizes: 43 px main values, 32 px split values, 29 px battery values, 23 px subtext, and 18 px status text.
+4. Preserve the source's `alpha > 127` monochrome threshold, horizontal alignment, and vertical centering based on actual rendered ink bounds.
+5. Back runtime shaping and raster caching with a 256 KiB internal-RAM heap. Do not use ESP32-S3 PSRAM as the global allocator because `cosmic-text` uses `Arc` and its atomic reference counts must reside in internal RAM.
+6. Keep the Font Awesome Pro asset out of this repository because the source checkout does not document redistribution permission. Use Nixpkgs' Apache-2.0 `material-design-icons` package for grid `lightning-bolt` (`U+F140B`), solar `solar-power-variant-outline` (`U+F1A74`), heating `heating-coil` (`U+F1AAF`), shower `shower-head` (`U+F09A0`), and center backup-heater `recycle-variant` (`U+F139D`), deriving a five-glyph subset with `pyftsubset` before embedding it. Keep the remaining simple monochrome symbols as local geometry.
+
+**Exit criterion:** Bitter text metrics and rasterization match the thresholded source rendering; licensed font glyphs replace the grid, solar, heating, shower, and backup-heater approximations.
 
 ### Step 5 — Port models, routing, and formatting
 
@@ -435,9 +428,10 @@ Initial application RAM budget should explicitly account for:
 - typed update and publish channels;
 - task stacks;
 - approximately 1.2 KB of source-compatible hourly `f64` arrays;
-- small text-formatting buffers.
+- small text-formatting buffers;
+- the 256 KiB internal-RAM heap used by `cosmic-text` shaping and Swash raster caching.
 
-Glyph bitmaps belong in flash, not RAM.
+The Bitter Pro OTF belongs in flash. Keep the `cosmic-text` allocator in internal RAM rather than PSRAM because its `Arc` reference counts use atomics.
 
 **Exit criterion:** target build size is recorded, static buffers fit internal memory, and a multi-hour reconnect/update test remains stable.
 

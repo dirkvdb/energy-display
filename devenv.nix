@@ -2,6 +2,18 @@
 
 let
   espToolchainVersion = "1.97.0.0";
+  materialDesignIconsFont = "${pkgs.material-design-icons}/share/fonts/truetype/materialdesignicons-webfont.ttf";
+  materialDesignIconsSubset =
+    pkgs.runCommand "energy-display-material-design-icons.ttf"
+      {
+        nativeBuildInputs = [ pkgs.python3Packages.fonttools ];
+      }
+      ''
+        pyftsubset "${materialDesignIconsFont}" \
+          --output-file="$out" \
+          --unicodes=U+F09A0,U+F139D,U+F140B,U+F1A74,U+F1AAF \
+          --no-ignore-missing-unicodes
+      '';
 in
 {
   packages = with pkgs; [
@@ -10,6 +22,7 @@ in
     espup
     git
     just
+    material-design-icons
     pkg-config
     rustup
   ];
@@ -20,8 +33,8 @@ in
   env.CARGO_HOME = config.env.DEVENV_STATE + "/cargo";
   env.ESPUP_EXPORT_FILE = config.env.DEVENV_STATE + "/export-esp.sh";
   env.ESPUP_TOOLCHAIN_VERSION = espToolchainVersion;
+  env.MATERIAL_DESIGN_ICONS_FONT = materialDesignIconsSubset;
   env.LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [ pkgs.SDL2 ];
-
 
   enterShell = ''
     mkdir -p "$DEVENV_STATE" "$DEVENV_STATE/home"
