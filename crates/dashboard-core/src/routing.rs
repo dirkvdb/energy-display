@@ -107,10 +107,11 @@ mod tests {
         assert_eq!(
             decode_update(
                 SOLAR_TOPIC,
-                br#"{"OutputPower":2700.0,"PVEnergyToday":8.5,"BDCChargePower":4400.0,"BDCDischargePower":200.0,"BDCStateOfCharge":13.0,"DischargeEnergyToday":0.4,"ChargeEnergyToday":3.2}"#,
+                br#"{"OutputPower":9999.0,"PV1InputPower":1200.0,"PV2InputPower":1300.0,"PVEnergyToday":8.5,"BDCChargePower":4400.0,"BDCDischargePower":200.0,"BDCStateOfCharge":13.0,"DischargeEnergyToday":0.4,"ChargeEnergyToday":3.2}"#,
             ),
             Ok(Update::Solar(SolarData {
-                output_power: 2700.0,
+                pv1_input_power: 1200.0,
+                pv2_input_power: 1300.0,
                 energy_today: 8.5,
                 battery_charge_power: 4400.0,
                 battery_discharge_power: 200.0,

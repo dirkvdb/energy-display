@@ -20,8 +20,10 @@ pub struct PowerData {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Deserialize)]
 pub struct SolarData {
-    #[serde(rename = "OutputPower")]
-    pub output_power: f64,
+    #[serde(rename = "PV1InputPower")]
+    pub pv1_input_power: f64,
+    #[serde(rename = "PV2InputPower")]
+    pub pv2_input_power: f64,
     #[serde(rename = "PVEnergyToday")]
     pub energy_today: f64,
     #[serde(rename = "BDCChargePower")]
@@ -38,7 +40,7 @@ pub struct SolarData {
 
 impl SolarData {
     pub fn pv_total_power(self) -> f64 {
-        self.output_power - self.battery_discharge_power
+        self.pv1_input_power + self.pv2_input_power
     }
 }
 
@@ -289,13 +291,14 @@ mod tests {
     const MORNING: LocalDateTime = LocalDateTime::new(2026, 9, 9, 3, 10, 15);
 
     #[test]
-    fn combines_home_and_garage_and_subtracts_battery_discharge() {
+    fn combines_home_pv_inputs_with_garage_production() {
         let mut dashboard = Dashboard::default();
         dashboard.apply(
             Update::Solar(SolarData {
-                output_power: 2700.0,
+                pv1_input_power: 1200.0,
+                pv2_input_power: 1300.0,
                 energy_today: 8.5,
-                battery_discharge_power: 200.0,
+                battery_discharge_power: 900.0,
                 ..SolarData::default()
             }),
             MORNING,
@@ -344,7 +347,8 @@ mod tests {
             Update::HeatpumpForce(true),
             Update::OutdoorSensor(sensor),
             Update::Solar(SolarData {
-                output_power: 2700.0,
+                pv1_input_power: 1200.0,
+                pv2_input_power: 1300.0,
                 energy_today: 8.5,
                 battery_charge_power: 400.0,
                 battery_discharge_power: 200.0,

@@ -53,7 +53,7 @@ impl Default for DashboardRenderer {
 impl DashboardRenderer {
     pub fn new() -> Self {
         Self {
-            split_solar_production: false,
+            split_solar_production: true,
             font_renderer: FontRenderer::new(),
         }
     }

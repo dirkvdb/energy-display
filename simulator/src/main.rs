@@ -144,7 +144,7 @@ mod tests {
     use dashboard_core::{model::test_dashboard, renderer::BLACK};
 
     #[test]
-    fn renders_advanced_dashboard_fixture() {
+    fn renders_default_split_solar_dashboard_fixture() {
         let mut display = SimulatorDisplay::<BinaryColor>::new(Size::new(WIDTH, HEIGHT));
         display.clear(WHITE).unwrap();
         DashboardRenderer::new()
@@ -178,11 +178,11 @@ mod tests {
     }
 
     #[test]
-    fn renders_split_solar_variant() {
+    fn renders_combined_solar_variant() {
         let mut display = SimulatorDisplay::<BinaryColor>::new(Size::new(WIDTH, HEIGHT));
         display.clear(WHITE).unwrap();
         DashboardRenderer::new()
-            .with_split_solar_production(true)
+            .with_split_solar_production(false)
             .render(&mut display, &test_dashboard().status, FIXTURE_TIME)
             .unwrap();
     }
