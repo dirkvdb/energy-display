@@ -14,7 +14,7 @@ embassy-net-tuntap = "=0.1.1"
 embassy-time = { version = "=0.5.1", features = ["log", "std"] }
 embedded-graphics = "=0.8.2"
 embedded-graphics-simulator = "=0.8.0"
-energydisplay-firmware = { path = "../firmware" }
+energydisplay-firmware = { path = "../firmware", features = ["sim"] }
 env_logger = "=0.11.8"
 log = "=0.4.34"
 static_cell = "=2.1.1"

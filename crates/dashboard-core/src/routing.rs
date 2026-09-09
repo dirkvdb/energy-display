@@ -3,7 +3,7 @@ use core::str;
 use serde::de::DeserializeOwned;
 
 #[cfg(test)]
-use crate::model::SolarData;
+use crate::model::{GarageSolarData, SolarData};
 use crate::model::{PowerData, Update};
 
 pub const HEATPUMP_DATA_TOPIC: &str = "espaltherma/ATTR";
@@ -84,10 +84,31 @@ fn decode_relay(payload: &[u8]) -> Result<bool, DecodeError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::Update;
+    use crate::model::{HeatpumpData, TemperatureData, Update};
 
     #[test]
     fn decodes_all_live_payload_kinds() {
+        assert_eq!(
+            decode_update(
+                HEATPUMP_DATA_TOPIC,
+                br#"{"indoor_temperature":21.5,"outdoor_temperature":12.25,"dhw_temperature":48.0,"extra":true}"#,
+            ),
+            Ok(Update::Heatpump(HeatpumpData {
+                indoor_temperature: 21.5,
+                outdoor_temperature: 12.25,
+                dhw_temperature: 48.0,
+            }))
+        );
+        assert_eq!(
+            decode_update(
+                OUTDOOR_SENSOR_TOPIC,
+                br#"{"temperature":13.5,"humidity":64.0,"battery":90}"#,
+            ),
+            Ok(Update::OutdoorSensor(TemperatureData {
+                temperature: 13.5,
+                humidity: 64.0,
+            }))
+        );
         assert_eq!(
             decode_update(HEATPUMP_POWER_TOPIC, br#"{"power":1234}"#),
             Ok(Update::HeatpumpPower(1234))
@@ -119,6 +140,14 @@ mod tests {
                 battery_discharge_energy_today: 0.4,
                 battery_charge_energy_today: 3.2,
             }))
+        );
+    }
+
+    #[test]
+    fn garage_inverter_down_payload_decodes_as_zero_production() {
+        assert_eq!(
+            decode_update(GARAGE_SOLAR_TOPIC, br#"{"InverterStatus": -1 }"#),
+            Ok(Update::GarageSolar(GarageSolarData::default()))
         );
     }
 

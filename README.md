@@ -82,7 +82,7 @@ just sim
 
 For manual lifecycle control, use `just simulator-tap-up`, `just simulator-run`, and `just simulator-tap-down`. The teardown recipe is idempotent. `just simulator-check` remains non-privileged and does not open TAP or SDL.
 
-The simulator opens a 2x-scale 400x300 Advanced dashboard, connects to the real broker with the embedded Secretspec MQTT password, subscribes through the same bounded `rust-mqtt` v5 session code, applies the same typed updates, and runs the same persistent renderer under Embassy's host executor. It intentionally uses the same MQTT client ID as firmware, so do not run the board and simulator simultaneously unless the broker is configured to tolerate that collision.
+The simulator opens a 2x-scale 400x300 Advanced dashboard, connects to the real broker with the embedded Secretspec MQTT password, subscribes through the same bounded `rust-mqtt` v5 session code, applies the same typed updates, and runs the same persistent renderer under Embassy's host executor. It uses the dedicated MQTT client ID `energydisplay-simulator`, so it can run alongside firmware without either client disconnecting the other.
 
 This is a host-driver substitution rather than an ESP32 instruction emulator. Linux TAP replaces the ESP Wi-Fi link driver, while `embassy-net`, Embassy timing/tasks, MQTT parsing, bounded update channel, dashboard state, and `embedded-graphics` renderer are shared with firmware. It does not emulate Wi-Fi association, SPI, or ST7305 controller initialization.
 

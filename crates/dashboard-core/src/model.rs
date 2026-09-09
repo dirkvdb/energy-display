@@ -45,6 +45,7 @@ impl SolarData {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Deserialize)]
+#[serde(default)]
 pub struct GarageSolarData {
     #[serde(rename = "PVTotalPower")]
     pub pv_total_power: f64,
