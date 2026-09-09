@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["firmware", "simulator"]
+members = ["crates/dashboard-core", "firmware", "simulator"]
 default-members = ["firmware"]
 
 [profile.dev]

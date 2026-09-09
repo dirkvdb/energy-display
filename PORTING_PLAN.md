@@ -15,11 +15,17 @@ The target must reproduce the active `Style::Advanced` dashboard, including the 
 
 The RLCD is not e-paper. The port will not contain refresh LUT selection, busy-pin waits, clean-screen cycles, periodic full-refresh counters, deep sleep after each frame, or the source's 30-second e-paper update gate. A valid state change may be rendered immediately.
 
-## Current milestone — M0 board support
+## Completed milestone — M0 board support
 
 Implementation starts with hardware proof, before source fixtures, networking, or dashboard parity work. The first milestone is intentionally limited to one bare-metal firmware binary that proves the toolchain, boot path, board pin map, SPI transport, ST7305 initialization, framebuffer polarity, orientation, text rendering, and serial diagnostics.
 
-**Status (2026-09-02):** software scaffold, target validation, and release build complete; physical flash and panel acceptance pending.
+**Status (2026-09-09):** complete. The same simulator frame was rendered successfully on the physical panel, confirming the toolchain, SPI transport, framebuffer polarity, orientation, and display controller integration.
+
+## Current milestone — shared dashboard core
+
+The workspace now includes `crates/dashboard-core`, a `no_std` implementation of the active model, exact live MQTT topic/payload decoding, corrected explicit-time hourly aggregation, allocation-free formatting, and the complete Advanced dashboard geometry/graph. Both the simulator and firmware render the source `inkytool test` fixture through this shared code.
+
+Strict font parity is still open: the current renderer uses built-in bitmap text and geometric monochrome icons. The source's Font Awesome Pro asset was not copied because its redistribution terms are not documented in the source checkout. Networking, live wall time, retained summary handling, and app-task integration remain later milestones.
 
 ### Deliverables
 

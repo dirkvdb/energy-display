@@ -1,8 +1,8 @@
 # Energy Display
 
-Bare-metal Rust port for the Waveshare ESP32-S3-RLCD-4.2. The current milestone is board support: initialize the ST7305 reflective LCD and show a static hardware-validation message.
+Bare-metal Rust port of `../inky-solar` for the Waveshare ESP32-S3-RLCD-4.2. Board support is validated, and the firmware now renders the source application's Advanced dashboard from a shared `no_std` model and renderer.
 
-See [`PORTING_PLAN.md`](PORTING_PLAN.md) for the full dashboard port.
+See [`PORTING_PLAN.md`](PORTING_PLAN.md) for the remaining network, clock, font-parity, and integration work.
 
 ## Current hardware target
 
@@ -16,15 +16,9 @@ See [`PORTING_PLAN.md`](PORTING_PLAN.md) for the full dashboard port.
 | D/C / CS / RESET | GPIO5 / GPIO40 / GPIO41 |
 | TE | GPIO6, intentionally unused |
 
-The first frame is white with a black border and centered text:
+The firmware renders the same deterministic dashboard fixture used by `inkytool test` in `../inky-solar`: grid/solar values, battery state, hourly graph, status bar, and heat-pump row. The host simulator and ESP firmware invoke the same renderer.
 
-```text
-ENERGY DISPLAY
-ESP32-S3 + ST7305 OK
-400x300 landscape / SPI 10 MHz
-```
-
-The serial console logs startup, successful rendering, and a heartbeat every five seconds.
+The serial console logs startup, `advanced dashboard fixture rendered`, and `heartbeat: dashboard displayed` every five seconds.
 
 ## Development environment
 
@@ -41,7 +35,7 @@ Or run the checked-in tasks directly:
 | Recipe | Purpose |
 |---|---|
 | `just build` | Build the optimized release firmware |
-| `just test` | Validate firmware and test the simulator |
+| `just test` | Validate firmware and test the dashboard core and simulator |
 | `just sim` | Show the firmware renderer in a local window |
 
 | Command | Purpose |
@@ -68,7 +62,7 @@ just sim
 
 Run `devenv shell` first; it provisions and activates the pinned Espressif toolchain automatically, then use the `just` commands above.
 
-The simulator opens a 2x-scale window with the same 400x300 monochrome frame produced by the firmware. Close the window or press Escape to stop it. The simulator builds for the development machine while the normal firmware tasks continue to build for ESP32-S3.
+The simulator opens a 2x-scale window with the same deterministic 400x300 Advanced dashboard frame produced by the firmware. Close the window or press Escape to stop it. The simulator builds for the development machine while the normal firmware tasks continue to build for ESP32-S3.
 
 This is a display-level simulator rather than an ESP32 instruction emulator. It executes the exact shared `embedded-graphics` drawing code, but does not emulate SPI, the ST7305 controller initialization, Embassy timing, or other peripherals.
 
@@ -85,11 +79,13 @@ just monitor
 
 Acceptance checks:
 
-1. The serial log reaches `display hardware check rendered` without a panic.
-2. The panel background is white and the border/text are black.
-3. The text reads left-to-right in 400×300 landscape orientation.
-4. The complete border is visible and stable.
-5. `heartbeat: display initialized` appears every five seconds.
+1. The serial log reaches `advanced dashboard fixture rendered` without a panic.
+2. The panel shows the complete Advanced dashboard in 400×300 landscape orientation.
+3. The fixture contains a 3.0 kW grid export, 3.0 kW solar production, 13% charging battery, hourly bars around 12:00–14:00, and a 3.0 kW backup-heater load.
+4. The complete outer border is visible and stable.
+5. `heartbeat: dashboard displayed` appears every five seconds.
+
+The renderer currently uses allocation-free built-in bitmap text and locally drawn monochrome icons. Layout, formatting, graph calculations, state derivation, and polarity are ported, but pixel-identical Bitter Pro and Font Awesome rendering is still pending. The Font Awesome asset in the source tree is a Pro font without a checked-in redistribution license, so it has not been copied into this repository.
 
 If the panel remains blank or is unstable, keep SPI at 10 MHz and compare the initialization sequence with `.board-reference` before changing frequencies. The pinned `st7305` crate intentionally gets tested unchanged first; the vendor example includes an additional gate-timing command (`0x62`) that may require an upstream driver fix if hardware proves it necessary.
 
@@ -98,11 +94,13 @@ If the panel remains blank or is unstable, keep SPI at 10 MHz and compare the in
 ```text
 .
 ├── .cargo/config.toml       # Xtensa target, linker flags, espflash runner
+├── crates/
+│   └── dashboard-core/      # no_std model, MQTT decoding, formatting, renderer
 ├── firmware/
 │   └── src/
 │       ├── board.rs         # Board dimensions, pins, and bring-up settings
-│       ├── display.rs       # Panel polarity and validation frame
-│       ├── lib.rs           # Shared no_std board and rendering library
+│       ├── display.rs       # ST7305 clear/polarity helpers
+│       ├── lib.rs           # Shared board/display adapter
 │       └── main.rs          # Embassy runtime and hardware initialization
 ├── simulator/
 │   └── src/main.rs          # Native window using the shared renderer

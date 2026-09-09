@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 
+use dashboard_core::{DashboardRenderer, LocalDateTime, model::test_dashboard};
 use display_interface_spi::SPIInterface;
 use embassy_executor::Spawner;
 use embassy_time::Timer;
@@ -72,12 +73,19 @@ async fn main(_spawner: Spawner) {
     panel.set_orientation(Orientation::Landscape);
 
     display::clear_white(&mut panel);
-    display::draw_hardware_check(&mut panel).unwrap();
+    let dashboard = test_dashboard();
+    DashboardRenderer::new()
+        .render(
+            &mut panel,
+            &dashboard.status,
+            LocalDateTime::new(2026, 9, 9, 3, 12, 34),
+        )
+        .unwrap();
     panel.flush().unwrap();
-    println!("display hardware check rendered");
+    println!("advanced dashboard fixture rendered");
 
     loop {
         Timer::after_secs(board::HEARTBEAT_INTERVAL_SECS).await;
-        println!("heartbeat: display initialized");
+        println!("heartbeat: dashboard displayed");
     }
 }

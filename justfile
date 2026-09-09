@@ -30,6 +30,7 @@ simulator-run:
     cargo run -p energydisplay-simulator --target {{host_target}} --locked
 
 simulator-check:
+    cargo test -p dashboard-core --target {{host_target}} --locked
     cargo test -p energydisplay-simulator --target {{host_target}} --locked
 
 validate: firmware-validate

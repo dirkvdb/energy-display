@@ -1,3 +1,4 @@
+pub use dashboard_core::renderer::{BLACK, WHITE};
 #[cfg(target_arch = "xtensa")]
 use display_interface::WriteOnlyDataCommand;
 use embedded_graphics::{
@@ -16,11 +17,6 @@ use embedded_hal::digital::OutputPin;
 use st7305::St7305;
 
 use crate::board::{DISPLAY_HEIGHT, DISPLAY_WIDTH};
-
-/// Physical black on the Waveshare ST7305 panel profile.
-pub const BLACK: BinaryColor = BinaryColor::Off;
-/// Physical white on the Waveshare ST7305 panel profile.
-pub const WHITE: BinaryColor = BinaryColor::On;
 
 #[cfg(target_arch = "xtensa")]
 const WHITE_FRAMEBUFFER_BYTE: u8 = 0xff;

@@ -327,6 +327,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "dashboard-core"
+version = "0.1.0"
+dependencies = [
+ "embedded-graphics",
+ "heapless 0.8.0",
+ "num-traits",
+ "serde",
+ "serde-json-core",
+]
+
+[[package]]
 name = "defmt"
 version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -707,6 +718,7 @@ dependencies = [
 name = "energydisplay-firmware"
 version = "0.1.0"
 dependencies = [
+ "dashboard-core",
  "display-interface",
  "display-interface-spi",
  "embassy-executor",
@@ -726,6 +738,7 @@ dependencies = [
 name = "energydisplay-simulator"
 version = "0.1.0"
 dependencies = [
+ "dashboard-core",
  "embedded-graphics",
  "embedded-graphics-simulator",
  "energydisplay-firmware",
@@ -1223,6 +1236,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0bfb9eb618601c89945a70e254898da93b13be0388091d42117462b265bb3fad"
 dependencies = [
  "hash32",
+ "serde",
  "stable_deref_trait",
 ]
 
@@ -1775,6 +1789,17 @@ checksum = "4148590afebada386688f18773da617792bf2ef03ffc1e4cbd2b1d45b023e0ba"
 dependencies = [
  "serde_core",
  "serde_derive",
+]
+
+[[package]]
+name = "serde-json-core"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5b81787e655bd59cecadc91f7b6b8651330b2be6c33246039a65e5cd6f4e0828"
+dependencies = [
+ "heapless 0.8.0",
+ "ryu",
+ "serde",
 ]
 
 [[package]]
