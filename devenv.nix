@@ -29,6 +29,7 @@ in
   env.CARGO_HOME = config.env.DEVENV_STATE + "/cargo";
   env.ESPUP_EXPORT_FILE = config.env.DEVENV_STATE + "/export-esp.sh";
   env.ESPUP_TOOLCHAIN_VERSION = espToolchainVersion;
+  env.LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [ pkgs.SDL2 ];
 
   tasks."esp:toolchain" = {
     description = "Install the pinned Espressif Rust toolchain for ESP32-S3";
