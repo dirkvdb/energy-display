@@ -43,6 +43,10 @@ in
   ];
 
   # Keep all mutable Rust/ESP tooling inside devenv's ignored project state.
+  env.WIFI_SSID = config.secretspec.secrets.WIFI_SSID;
+  env.WIFI_PASSWORD = config.secretspec.secrets.WIFI_PASSWORD;
+  env.MQTT_PASSWORD = config.secretspec.secrets.MQTT_PASSWORD;
+
   env.RUSTUP_HOME = config.env.DEVENV_STATE + "/rustup";
   env.RUSTUP_TOOLCHAIN = "esp";
   env.CARGO_HOME = config.env.DEVENV_STATE + "/cargo";

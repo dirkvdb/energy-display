@@ -7,7 +7,7 @@ Port the production dashboard in `../inky-solar` to the Waveshare ESP32-S3-RLCD-
 - bare-metal Rust on `xtensa-esp32s3-none-elf`;
 - Embassy for async execution, timing, and networking;
 - `esp-hal` for ESP32-S3 hardware and `esp-rtos` for Embassy integration;
-- `esp-wifi` for the later Wi-Fi milestone;
+- `esp-radio` for ESP32-S3 Wi-Fi;
 - `embedded-graphics` for the complete 400×300 user interface;
 - the existing `st7305` crate for the panel framebuffer, controller initialization, and SPI flushes.
 
@@ -21,11 +21,13 @@ Implementation starts with hardware proof, before source fixtures, networking, o
 
 **Status (2026-09-09):** complete. The same simulator frame was rendered successfully on the physical panel, confirming the toolchain, SPI transport, framebuffer polarity, orientation, and display controller integration.
 
-## Current milestone — shared dashboard core
+## Current milestone — Wi-Fi and live MQTT integration
 
-The workspace now includes `crates/dashboard-core`, a `no_std` implementation of the active model, exact live MQTT topic/payload decoding, corrected explicit-time hourly aggregation, allocation-free formatting, and the complete Advanced dashboard geometry/graph. Both the simulator and firmware render the source `inkytool test` fixture through this shared code.
+The workspace includes `crates/dashboard-core`, a `no_std` implementation of the active model, exact live MQTT topic/payload decoding, corrected explicit-time hourly aggregation, allocation-free formatting, and the complete Advanced dashboard geometry/graph. The simulator renders the source `inkytool test` fixture, while the firmware starts with an empty model and feeds the same renderer from live MQTT updates.
 
-Bitter Pro Black parity is complete: the shared renderer uses `cosmic-text` 0.19 in `no_std + alloc` mode with the source font sizes, advanced shaping, monochrome threshold, alignment, and ink-bound vertical centering. Nix derives a metadata-preserving subset containing printable ASCII plus `°`, `↑`, and `↓` before embedding the font. The source's Font Awesome Pro asset was not copied because its redistribution terms are not documented in the source checkout. The grid, solar, heating, shower, and center backup-heater symbols use the Apache-2.0 Material Design Icons `lightning-bolt`, `solar-power-variant-outline`, `heating-coil`, `shower-head`, and `recycle-variant` glyphs, subset from the Nixpkgs font during environment construction; other monochrome symbols retain their local geometry. Networking, live wall time, retained summary handling, and app-task integration remain later milestones.
+Bitter Pro Black parity is complete: the shared renderer uses `cosmic-text` 0.19 in `no_std + alloc` mode with the source font sizes, advanced shaping, monochrome threshold, alignment, and ink-bound vertical centering. Nix derives a metadata-preserving subset containing printable ASCII plus `°`, `↑`, and `↓` before embedding the font. The source's Font Awesome Pro asset was not copied because its redistribution terms are not documented in the source checkout. The grid, solar, heating, shower, and center backup-heater symbols use the Apache-2.0 Material Design Icons `lightning-bolt`, `solar-power-variant-outline`, `heating-coil`, `shower-head`, and `recycle-variant` glyphs, subset from the Nixpkgs font during environment construction; other monochrome symbols retain their local geometry.
+
+Wi-Fi and live MQTT integration are implemented in software using the `esp-hal-v1.2.0` release-tagged `esp-radio`, Embassy DHCP/TCP, and `rust-mqtt` 0.5.1. Credentials come from a required Secretspec keyring profile and are embedded at build time. Network and MQTT tasks reconnect independently, all large protocol buffers are statically bounded, and accepted publications cross an eight-entry typed `Update` channel to the sole display/model owner. Hardware acceptance, live wall time, retained summary restore/publication, and long-running memory validation remain outstanding.
 
 ### Deliverables
 
@@ -216,7 +218,7 @@ Complete and physically accept M0 before starting these full-port steps.
 
 M0 establishes the minimal target with pinned `esp-hal`, `esp-rtos`, Embassy, graphics, and ST7305 dependencies. Preserve that known-good baseline while expanding it:
 
-1. Add `esp-wifi`, `embassy-net`, and other dependencies only when their consuming milestones begin, pinning a mutually compatible release set.
+1. Add `esp-radio`, `embassy-net`, and other dependencies only when their consuming milestones begin, pinning a mutually compatible release set.
 2. Add future workspace members only as they gain executable code or tests.
 3. Extend checked-in `devenv` tasks for host tests, target checks/builds, formatting, linting, flashing, and serial monitoring. Every build remains inside devenv.
 4. Keep `xtensa-esp32s3-none-elf`, linker settings, panic/backtrace support, and the `espflash` runner under version control.
@@ -335,6 +337,8 @@ Recommended correctness fixes, covered by tests:
 
 ### Step 7 — Bring up Embassy Wi-Fi and networking
 
+**Software status (2026-09-09):** implemented and target-built; physical DHCP/reconnect acceptance remains pending. The compatible radio stack comes from the readable `esp-hal-v1.2.0` Git release tag because crates.io's identically versioned `esp-radio 1.0.0-beta.0` targets the older `esp-hal 1.1` generation. `Cargo.lock` records the resolved release commit.
+
 1. Initialize ESP32-S3 clocks, RNG, timers, Wi-Fi radio, and Embassy executor resources.
 2. Allocate bounded static network resources and socket buffers; avoid placing display/DMA buffers on task stacks.
 3. Connect to 2.4 GHz Wi-Fi using configured credentials.
@@ -346,6 +350,8 @@ Recommended correctness fixes, covered by tests:
 **Exit criterion:** the board acquires a lease, resolves configured hosts, reconnects after AP loss, and does not leak resources or restart the UI.
 
 ### Step 8 — Add bounded async MQTT
+
+**Software status (2026-09-09):** live subscriptions and typed update delivery are implemented and target-built; broker/hardware acceptance and retained summary restore/publication remain pending. The client uses MQTT v5, QoS 2 subscriptions, a 180-second keepalive, one in-flight subscription, bounded receive state, 4 KiB caller-owned TCP buffers, 4 KiB resettable scratch storage, and an eight-entry update channel.
 
 Perform a short dependency spike before committing to a client. The selected `no_std` client must work with `embassy-net` or `embedded-nal-async` and support:
 
@@ -373,6 +379,8 @@ The source requests QoS 2 for subscriptions, but many embedded clients support o
 **Exit criterion:** a local broker replay updates all state fields, reconnects cleanly, restores retained history, and publishes a retained compatible summary.
 
 ### Step 9 — Integrate the application task
+
+**Software status (2026-09-09):** the main task owns the display, renderer cache, and dashboard model; it redraws immediately for each typed update and retains the last frame through network outages. RTC/SNTP time, the independent one-minute redraw, display recovery, and hardware acceptance remain pending.
 
 1. Initialize and clear the ST7305.
 2. Start network, clock, and MQTT tasks.

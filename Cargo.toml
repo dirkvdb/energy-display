@@ -6,6 +6,9 @@ default-members = ["firmware"]
 [profile.dev]
 opt-level = "s"
 
+[profile.dev.package.esp-radio]
+opt-level = 3
+
 [profile.release]
 codegen-units = 1
 debug = 2

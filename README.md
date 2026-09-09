@@ -1,8 +1,8 @@
 # Energy Display
 
-Bare-metal Rust port of `../inky-solar` for the Waveshare ESP32-S3-RLCD-4.2. Board support is validated, and the firmware now renders the source application's Advanced dashboard from a shared `no_std` model and renderer.
+Bare-metal Rust port of `../inky-solar` for the Waveshare ESP32-S3-RLCD-4.2. Board support is validated, and the firmware renders the source application's Advanced dashboard from a shared `no_std` model and renderer. It now connects to Wi-Fi with Embassy, receives live MQTT v5 telemetry through a bounded `rust-mqtt` client, and redraws the display for each accepted update.
 
-See [`PORTING_PLAN.md`](PORTING_PLAN.md) for the remaining network, clock, and integration work.
+See [`PORTING_PLAN.md`](PORTING_PLAN.md) for the remaining clock, retained-summary, and reliability work.
 
 ## Current hardware target
 
@@ -16,13 +16,27 @@ See [`PORTING_PLAN.md`](PORTING_PLAN.md) for the remaining network, clock, and i
 | D/C / CS / RESET | GPIO5 / GPIO40 / GPIO41 |
 | TE | GPIO6, intentionally unused |
 
-The firmware renders the same deterministic dashboard fixture used by `inkytool test` in `../inky-solar`: grid/solar values, battery state, hourly graph, status bar, and heat-pump row. The host simulator and ESP firmware invoke the same renderer.
+The host simulator renders the same deterministic dashboard fixture used by `inkytool test` in `../inky-solar`. The firmware starts with an empty dashboard, preserves the most recently received state across network outages, and redraws immediately after each valid MQTT update. The status-bar date remains a temporary monotonic fixture until RTC/SNTP support is added.
 
-The serial console logs startup, `advanced dashboard fixture rendered`, and `heartbeat: dashboard displayed` every five seconds.
+The serial console logs display startup, Wi-Fi connection and reconnect state, the DHCP address, MQTT connection/subscription state, payload rejection details, display updates, and `heartbeat: dashboard displayed` every five seconds.
 
 ## Development environment
 
 All Cargo, build, and flash operations must run through [`devenv`](https://devenv.sh/). `devenv.nix` provides `espup`, `espflash`, and `rustup`, and installs Espressif Rust `1.97.0.0` into the ignored `.devenv` state directory. The first command can take a while while that toolchain downloads.
+
+### Secrets
+
+[`secretspec.toml`](secretspec.toml) declares three required build-time secrets. Store them in the configured OS keyring without putting values on the command line:
+
+```sh
+secretspec set --provider keyring WIFI_SSID
+secretspec set --provider keyring WIFI_PASSWORD
+secretspec set --provider keyring MQTT_PASSWORD
+```
+
+Each command prompts for its value. `devenv` resolves the `default` Secretspec profile and exports the values while compiling. The firmware uses `env!`, so all three credentials are embedded in the flashed binary; anyone able to read the firmware image may recover them. They are never printed by the firmware.
+
+The non-secret MQTT defaults in `firmware/src/config.rs` preserve the existing deployment contract: broker `192.168.1.13:1883`, username `iot`, client ID `inkydisplay`, MQTT v5, and a 180-second keepalive. Port 1883 is unencrypted, so credentials and telemetry are exposed to observers on the local network.
 
 Enter the environment:
 
@@ -79,11 +93,12 @@ just monitor
 
 Acceptance checks:
 
-1. The serial log reaches `advanced dashboard fixture rendered` without a panic.
-2. The panel shows the complete Advanced dashboard in 400×300 landscape orientation.
-3. The fixture contains a 3.0 kW grid export, 3.0 kW solar production, 13% charging battery, hourly bars around 12:00–14:00, and a 3.0 kW backup-heater load.
-4. The complete outer border is visible and stable.
-5. `heartbeat: dashboard displayed` appears every five seconds.
+1. The serial log reaches `display: empty dashboard rendered` without a panic.
+2. Wi-Fi reports `wifi: connected`, followed by `network: DHCP address ...`.
+3. MQTT reports a TCP connection and eight successful subscription acknowledgements, followed by `mqtt: subscribed to 8 live filters ...`.
+4. Published telemetry produces `display: dashboard updated` and appears in the corresponding dashboard fields.
+5. Disconnecting the access point produces Wi-Fi/network/MQTT failure logs while the last dashboard frame remains visible; restoring it reconnects and resubscribes.
+6. The complete outer border is visible and stable, and `heartbeat: dashboard displayed` continues every five seconds.
 
 Text rendering now matches the source path: the OFL-licensed Bitter Pro Black font is shaped/rasterized at runtime by `cosmic-text` 0.19 with its `no_std` and `swash` features. During environment construction, `devenv.nix` subsets the checked-in OTF to printable ASCII plus `°`, `↑`, and `↓`, preserving the original family and Black weight metadata before embedding it in flash. The renderer preserves the source font sizes, advanced shaping, `alpha > 127` monochrome threshold, alignment, and ink-bound vertical centering. The source Font Awesome asset is a Pro font without a checked-in redistribution license, so it is not copied. Instead, `devenv.nix` takes the Apache-2.0 `material-design-icons` font from Nixpkgs and subsets it to the five required glyphs. The grid, solar, heating, shower, and center backup-heater icons use `lightning-bolt`, `solar-power-variant-outline`, `heating-coil`, `shower-head`, and `recycle-variant`, respectively. The small derived font is embedded in the firmware; the remaining monochrome symbols continue to use the existing local geometry.
 
@@ -99,10 +114,14 @@ If the panel remains blank or is unstable, keep SPI at 10 MHz and compare the in
 │   └── dashboard-core/      # no_std model, MQTT decoding, formatting, renderer
 ├── firmware/
 │   └── src/
-│       ├── board.rs         # Board dimensions, pins, and bring-up settings
+│       ├── board.rs         # Board dimensions, pins, and memory settings
+│       ├── config.rs        # Embedded credentials and MQTT defaults
 │       ├── display.rs       # ST7305 clear/polarity helpers
+│       ├── tasks/
+│       │   ├── mqtt.rs      # Bounded MQTT v5 client and typed update channel
+│       │   └── net.rs       # Wi-Fi reconnect, DHCP status, and network runner
 │       ├── lib.rs           # Shared board/display adapter
-│       └── main.rs          # Embassy runtime and hardware initialization
+│       └── main.rs          # Runtime, hardware initialization, and display owner
 ├── simulator/
 │   └── src/main.rs          # Native window using the shared renderer
 ├── Cargo.toml               # Workspace

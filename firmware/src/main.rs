@@ -1,15 +1,22 @@
 #![no_std]
 #![no_main]
 
-use dashboard_core::{DashboardRenderer, LocalDateTime, model::test_dashboard};
+use dashboard_core::{Dashboard, DashboardRenderer, LocalDateTime};
 use display_interface_spi::SPIInterface;
 use embassy_executor::Spawner;
-use embassy_time::Timer;
+use embassy_futures::select::{Either, select};
+use embassy_net::StackResources;
+use embassy_time::{Duration, Instant, Ticker};
 use embedded_hal_bus::spi::ExclusiveDevice;
-use energydisplay_firmware::{board, display};
+use energydisplay_firmware::{
+    board, config, display,
+    tasks::{mqtt, net},
+};
 use esp_backtrace as _;
 use esp_hal::{
     gpio::{Level, Output, OutputConfig},
+    ram,
+    rng::Rng,
     spi::{
         Mode,
         master::{Config as SpiConfig, Spi},
@@ -18,15 +25,24 @@ use esp_hal::{
     timer::timg::TimerGroup,
 };
 use esp_println::println;
+use esp_radio::wifi::{
+    AuthenticationMethodConfig, Config as WifiConfig, ControllerConfig, Interface, WifiController,
+    sta::StationConfig,
+};
 use st7305::{Orientation, St7305};
+use static_cell::StaticCell;
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
+static NETWORK_RESOURCES: StaticCell<StackResources<2>> = StaticCell::new();
+static MQTT_BUFFERS: StaticCell<mqtt::Buffers> = StaticCell::new();
+
 #[esp_hal::main]
-async fn main(_spawner: Spawner) {
-    println!("energydisplay board-support firmware starting");
+async fn main(spawner: Spawner) -> ! {
+    println!("energydisplay firmware starting");
 
     let peripherals = esp_hal::init(esp_hal::Config::default());
+    esp_alloc::heap_allocator!(#[ram(reclaimed)] size: board::RADIO_HEAP_SIZE);
     esp_alloc::heap_allocator!(size: board::FONT_HEAP_SIZE);
 
     let timer_group = TimerGroup::new(peripherals.TIMG0);
@@ -69,25 +85,82 @@ async fn main(_spawner: Spawner) {
     let interface = SPIInterface::new(spi_device, data_command);
     let mut panel = St7305::new(interface, reset);
 
-    println!("initializing ST7305");
+    println!("display: initializing ST7305");
     let mut delay = embassy_time::Delay;
     panel.init_async(&mut delay).await.unwrap();
     panel.set_orientation(Orientation::Landscape);
 
+    let mut dashboard = Dashboard::default();
+    let mut renderer = DashboardRenderer::new();
     display::clear_white(&mut panel);
-    let dashboard = test_dashboard();
-    DashboardRenderer::new()
-        .render(
-            &mut panel,
-            &dashboard.status,
-            LocalDateTime::new(2026, 9, 9, 3, 12, 34),
-        )
+    renderer
+        .render(&mut panel, &dashboard.status, application_time())
         .unwrap();
     panel.flush().unwrap();
-    println!("advanced dashboard fixture rendered");
+    println!("display: empty dashboard rendered");
 
+    let station_config = WifiConfig::Station(
+        StationConfig::default()
+            .with_ssid(
+                config::WIFI_SSID
+                    .try_into()
+                    .expect("WIFI_SSID exceeds the Wi-Fi driver limit"),
+            )
+            .with_authentication(AuthenticationMethodConfig::Wpa2Personal(
+                config::WIFI_PASSWORD
+                    .try_into()
+                    .expect("WIFI_PASSWORD exceeds the Wi-Fi driver limit"),
+            )),
+    );
+
+    println!("wifi: initializing station");
+    let wifi_interface = Interface::station();
+    let controller = WifiController::new(
+        peripherals.WIFI,
+        ControllerConfig::default().with_initial_config(station_config),
+    )
+    .expect("failed to initialize Wi-Fi controller");
+
+    let rng = Rng::new();
+    let seed = (rng.random() as u64) << 32 | rng.random() as u64;
+    let (stack, runner) = embassy_net::new(
+        wifi_interface,
+        embassy_net::Config::dhcpv4(Default::default()),
+        NETWORK_RESOURCES.init(StackResources::new()),
+        seed,
+    );
+
+    spawner.spawn(net::runner_task(runner).unwrap());
+    spawner.spawn(net::connection_task(controller).unwrap());
+    spawner.spawn(net::status_task(stack).unwrap());
+    spawner.spawn(mqtt::task(stack, MQTT_BUFFERS.init(mqtt::Buffers::new())).unwrap());
+
+    let mut heartbeat = Ticker::every(Duration::from_secs(board::HEARTBEAT_INTERVAL_SECS));
     loop {
-        Timer::after_secs(board::HEARTBEAT_INTERVAL_SECS).await;
-        println!("heartbeat: dashboard displayed");
+        match select(mqtt::UPDATES.receive(), heartbeat.next()).await {
+            Either::First(update) => {
+                let now = application_time();
+                dashboard.apply(update, now);
+                display::clear_white(&mut panel);
+                renderer.render(&mut panel, &dashboard.status, now).unwrap();
+                panel.flush().unwrap();
+                println!("display: dashboard updated");
+            }
+            Either::Second(_) => println!("heartbeat: dashboard displayed"),
+        }
     }
+}
+
+/// Temporary monotonic display time until the RTC/SNTP milestone is implemented.
+fn application_time() -> LocalDateTime {
+    const START_MINUTE_OF_DAY: u64 = 12 * 60 + 34;
+    let minute_of_day = (START_MINUTE_OF_DAY + Instant::now().as_secs() / 60) % (24 * 60);
+    LocalDateTime::new(
+        2026,
+        9,
+        9,
+        3,
+        (minute_of_day / 60) as u8,
+        (minute_of_day % 60) as u8,
+    )
 }
