@@ -42,9 +42,9 @@ ESP32-S3 + ST7305 OK
 
 ### M0 exit criterion
 
-- `devenv tasks run firmware:validate` passes;
-- `devenv tasks run firmware:build` produces the target release image;
-- `devenv tasks run firmware:flash` boots without panic;
+- `just validate` passes;
+- `just build` produces the target release image;
+- `just flash` boots without panic;
 - serial reports `display hardware check rendered` and continues heartbeats;
 - the physical panel has a stable white background, complete black border, and readable left-to-right text in landscape.
 
@@ -443,7 +443,7 @@ Run validation in this order:
 2. `st7305` adapter, command-trace, polarity, and packing tests on the host.
 3. MQTT fixture and summary compatibility tests.
 4. Golden-image tests for normal and split advanced layouts.
-5. Target check and release build through `devenv tasks run firmware:validate` and `devenv tasks run firmware:build`.
+5. Target check and release build through `just validate` and `just build`.
 6. Hardware display patterns at 10 MHz.
 7. Full dashboard at 10 MHz, then optional 24 MHz validation.
 8. Broker integration with retained messages and live updates.

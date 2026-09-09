@@ -44,16 +44,17 @@ Or run the checked-in tasks directly:
 | `just test` | Validate firmware and test the simulator |
 | `just sim` | Show the firmware renderer in a local window |
 
-| Task | Purpose |
+| Command | Purpose |
 |---|---|
-| `devenv tasks run firmware:format` | Apply Rust formatting |
-| `devenv tasks run firmware:validate` | Check formatting and type-check the target |
-| `devenv tasks run firmware:build` | Produce the optimized release ELF |
-| `devenv tasks run firmware:flash` | Build and flash without opening a monitor |
-| `devenv tasks run firmware:monitor` | Open the interactive serial monitor |
-| `devenv tasks run firmware:lock` | Refresh `Cargo.lock` after dependency changes |
-| `devenv tasks run simulator:run` | Show the firmware renderer in a local window |
-| `devenv tasks run simulator:check` | Build and test the native simulator |
+
+| `just firmware-format` | Apply Rust formatting |
+| `just validate` | Check formatting and type-check the target |
+| `just build` | Produce the optimized release ELF |
+| `just flash` | Build and flash without opening a monitor |
+| `just monitor` | Open the interactive serial monitor |
+| `just firmware-lock` | Refresh `Cargo.lock` after dependency changes |
+| `just sim` | Show the firmware renderer in a local window |
+| `just simulator-check` | Build and test the native simulator |
 
 Do not run an ambient `cargo` directly; it may select the wrong compiler because ESP32-S3 requires Espressif's Xtensa Rust toolchain.
 
@@ -65,7 +66,7 @@ Run the display renderer without connecting a board:
 just sim
 ```
 
-The underlying devenv task remains available as `devenv tasks run simulator:run`.
+Run `devenv shell` first; it provisions and activates the pinned Espressif toolchain automatically, then use the `just` commands above.
 
 The simulator opens a 2x-scale window with the same 400x300 monochrome frame produced by the firmware. Close the window or press Escape to stop it. The simulator builds for the development machine while the normal firmware tasks continue to build for ESP32-S3.
 
@@ -76,11 +77,11 @@ This is a display-level simulator rather than an ESP32 instruction emulator. It 
 Connect the board over USB, then run:
 
 ```sh
-devenv tasks run firmware:flash
-devenv tasks run firmware:monitor
+just flash
+just monitor
 ```
 
-`firmware:flash` builds the release image and flashes it. The separate monitor task is intentionally interactive and runs until stopped.
+`just flash` builds the release image and flashes it. The separate monitor command is intentionally interactive and runs until stopped.
 
 Acceptance checks:
 
