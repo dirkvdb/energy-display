@@ -25,9 +25,9 @@ Implementation starts with hardware proof, before source fixtures, networking, o
 
 The workspace includes `crates/dashboard-core`, a `no_std` implementation of the active model, exact live MQTT topic/payload decoding, corrected explicit-time hourly aggregation, allocation-free formatting, and the complete Advanced dashboard geometry/graph. Simulator tests render the source `inkytool test` fixture. Live simulator and firmware both start with an empty model and feed the same renderer from live MQTT updates.
 
-Bitter Pro Black parity is complete: the shared renderer uses `cosmic-text` 0.19 in `no_std + alloc` mode with the source font sizes, advanced shaping, monochrome threshold, alignment, and ink-bound vertical centering. Nix derives a metadata-preserving subset containing printable ASCII plus `°`, `↑`, and `↓` before embedding the font. The source's Font Awesome Pro asset was not copied because its redistribution terms are not documented in the source checkout. The grid, solar, heating, shower, and center backup-heater symbols use the Apache-2.0 Material Design Icons `lightning-bolt`, `solar-power-variant-outline`, `heating-coil`, `shower-head`, and `recycle-variant` glyphs, subset from the Nixpkgs font during environment construction; other monochrome symbols retain their local geometry.
+Bitter Black rendering is complete: the shared renderer uses `cosmic-text` 0.19 in `no_std + alloc` mode with the source font sizes, advanced shaping, monochrome threshold, alignment, and ink-bound vertical centering. Nix instantiates weight 900 from the pinned upstream variable TrueType font and derives a metadata-preserving subset containing printable ASCII plus `°`, `↑`, and `↓` before embedding it. The TrueType replacement avoids a target-only Zeno failure when rasterizing the original Bitter Pro CFF outlines. The source's Font Awesome Pro asset was not copied because its redistribution terms are not documented in the source checkout. The grid, solar, heating, shower, and center backup-heater symbols use the Apache-2.0 Material Design Icons `lightning-bolt`, `solar-power-variant-outline`, `heating-coil`, `shower-head`, and `recycle-variant` glyphs, subset from the Nixpkgs font during environment construction; other monochrome symbols retain their local geometry.
 
-Wi-Fi and live MQTT integration are implemented in software using the `esp-hal-v1.2.0` release-tagged `esp-radio`, Embassy DHCP/TCP, and `rust-mqtt` 0.5.1. Credentials come from a required Secretspec keyring profile and are embedded at build time. Network and MQTT tasks reconnect independently, all large protocol buffers are statically bounded, and accepted publications cross an eight-entry typed `Update` channel to the sole display/model owner. The live host simulator replaces only the ESP Wi-Fi driver with `embassy-net-tuntap`; it retains Embassy's executor, network stack and timing, the shared MQTT session, typed channel, model, and renderer. Hardware acceptance, live wall time, retained summary restore/publication, and long-running memory validation remain outstanding.
+Wi-Fi and live MQTT integration are implemented in software using the `esp-hal-v1.2.0` release-tagged `esp-radio`, Embassy DHCP/TCP, and `rust-mqtt` 0.5.1. Credentials come from a required Secretspec keyring profile and are embedded at build time. Network and MQTT tasks reconnect independently, all large protocol buffers are statically bounded, and accepted publications cross an eight-entry typed `Update` channel to the sole display/model owner. The live host simulator replaces only the ESP Wi-Fi driver with `embassy-net-tuntap`; it retains Embassy's executor, network stack and timing, the shared MQTT session, typed channel, model, and renderer. Hardware acceptance through live MQTT updates is complete. SNTP-backed local wall time is implemented in software; RTC persistence, retained summary restore/publication, NTP hardware acceptance, and long-running memory validation remain outstanding.
 
 ### Deliverables
 
@@ -277,11 +277,11 @@ The source uses proportional Bitter Pro Black text and Font Awesome Pro icons th
 
 **Implemented:**
 
-1. Subset the OFL-licensed Bitter Pro Black OTF to printable ASCII plus `°`, `↑`, and `↓`, preserve its family/weight metadata, and embed the derived OTF in flash.
+1. Instantiate weight 900 from the pinned OFL-licensed Bitter variable TTF, subset it to printable ASCII plus `°`, `↑`, and `↓`, preserve its family/weight metadata, and embed the derived TrueType font in flash. This replaces the source's Bitter Pro CFF outlines, which trigger a target-only Zeno rasterizer failure.
 2. Reuse `cosmic-text` 0.19 with `default-features = false` and features `no_std` and `swash`, rather than maintaining a custom font generator or bitmap renderer.
 3. Preserve the source's advanced shaping and sizes: 43 px main values, 32 px split values, 29 px battery values, 23 px subtext, and 18 px status text.
-4. Preserve the source's `alpha > 127` monochrome threshold, horizontal alignment, and vertical centering based on actual rendered ink bounds.
-5. Back runtime shaping and raster caching with a 256 KiB internal-RAM heap. Do not use ESP32-S3 PSRAM as the global allocator because `cosmic-text` uses `Arc` and its atomic reference counts must reside in internal RAM.
+4. Preserve the source's `alpha > 127` monochrome threshold, horizontal alignment, and vertical centering based on actual rendered ink bounds. Measure ink in a first cache-backed raster pass and write the second pass directly to the framebuffer so redraws do not require a large contiguous temporary pixel allocation.
+5. Back runtime shaping and raster caching with a 172 KiB regular internal-RAM heap plus the 64 KiB reclaimed region, leaving at least 56 KiB for the CPU0 stack. Do not use ESP32-S3 PSRAM as the global allocator because `cosmic-text` uses `Arc` and its atomic reference counts must reside in internal RAM.
 6. Keep the Font Awesome Pro asset out of this repository because the source checkout does not document redistribution permission. Use Nixpkgs' Apache-2.0 `material-design-icons` package for grid `lightning-bolt` (`U+F140B`), solar `solar-power-variant-outline` (`U+F1A74`), heating `heating-coil` (`U+F1AAF`), shower `shower-head` (`U+F09A0`), and center backup-heater `recycle-variant` (`U+F139D`), deriving a five-glyph subset with `pyftsubset` before embedding it. Keep the remaining simple monochrome symbols as local geometry.
 
 **Exit criterion:** Bitter text metrics and rasterization match the thresholded source rendering; licensed font glyphs replace the grid, solar, heating, shower, and backup-heater approximations.
@@ -312,6 +312,8 @@ The source uses proportional Bitter Pro Black text and Font Awesome Pro icons th
 ### Step 6 — Implement wall time and hourly history
 
 Wall time is required for the status bar, local-hour graph buckets, day rollover, stale-summary checks, and hourly summary publication.
+
+**Software status (2026-09-10):** SNTP synchronization against `192.168.1.1`, six-hour resynchronization, monotonic timekeeping between syncs, and `Europe/Brussels` CET/CEST conversion are implemented. Before the first sync, the status bar reports that it is waiting for time and telemetry updates do not initialize hourly buckets. RTC persistence, summary restore/publication, and physical NTP acceptance remain pending.
 
 1. Add an async PCF85063 driver over I²C on GPIO13/GPIO14, or integrate a compatible `embedded-hal-async` crate.
 2. Read and validate RTC time at boot.
@@ -380,7 +382,7 @@ The source requests QoS 2 for subscriptions, but many embedded clients support o
 
 ### Step 9 — Integrate the application task
 
-**Software status (2026-09-09):** the main task owns the display, renderer cache, and dashboard model; it redraws immediately for each typed update and retains the last frame through network outages. RTC/SNTP time, the independent one-minute redraw, display recovery, and hardware acceptance remain pending.
+**Software status (2026-09-10):** the main task owns the display, renderer cache, and dashboard model; it redraws for each typed update and each local minute change, and retains the last frame through network outages. SNTP local time and hardware operation through live MQTT updates are complete. RTC persistence and display recovery remain pending.
 
 1. Initialize and clear the ST7305.
 2. Start network, clock, and MQTT tasks.
@@ -437,9 +439,9 @@ Initial application RAM budget should explicitly account for:
 - task stacks;
 - approximately 1.2 KB of source-compatible hourly `f64` arrays;
 - small text-formatting buffers;
-- the 256 KiB internal-RAM heap used by `cosmic-text` shaping and Swash raster caching.
+- the 172 KiB regular internal-RAM heap plus 64 KiB reclaimed region used by `cosmic-text`, radio, and network allocations, while retaining a minimum 56 KiB CPU0 stack;
 
-The Bitter Pro OTF belongs in flash. Keep the `cosmic-text` allocator in internal RAM rather than PSRAM because its `Arc` reference counts use atomics.
+The subsetted Bitter TrueType font belongs in flash. Keep the `cosmic-text` allocator in internal RAM rather than PSRAM because its `Arc` reference counts use atomics.
 
 **Exit criterion:** target build size is recorded, static buffers fit internal memory, and a multi-hour reconnect/update test remains stable.
 

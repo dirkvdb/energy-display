@@ -76,12 +76,6 @@ type MqttClient<'a> = Client<
 >;
 type MqttSession = Session<RECEIVE_MAXIMUM, SEND_MAXIMUM>;
 
-#[cfg(target_arch = "xtensa")]
-#[embassy_executor::task]
-pub async fn task(stack: Stack<'static>, buffers: &'static mut Buffers) {
-    run(stack, buffers).await;
-}
-
 pub async fn run(stack: Stack<'static>, buffers: &'static mut Buffers) {
     let mut session = MqttSession::default();
 

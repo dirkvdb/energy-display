@@ -3,6 +3,8 @@ use core::net::Ipv4Addr;
 pub const WIFI_SSID: &str = env!("WIFI_SSID");
 pub const WIFI_PASSWORD: &str = env!("WIFI_PASSWORD");
 
+pub const NTP_SERVER_ADDRESS: Ipv4Addr = Ipv4Addr::new(192, 168, 1, 1);
+
 pub const MQTT_BROKER_ADDRESS: Ipv4Addr = Ipv4Addr::new(192, 168, 1, 13);
 pub const MQTT_PORT: u16 = 1883;
 pub const MQTT_CLIENT_ID: &str = "energydisplay";

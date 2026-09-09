@@ -1,4 +1,3 @@
-use embassy_executor::task;
 use embassy_net::{Runner, Stack};
 use embassy_time::{Duration, Timer};
 use esp_println::println;
@@ -7,12 +6,10 @@ use esp_radio::wifi::{Interface, WifiController};
 const INITIAL_RECONNECT_DELAY_SECS: u64 = 2;
 const MAX_RECONNECT_DELAY_SECS: u64 = 30;
 
-#[task]
 pub async fn runner_task(mut runner: Runner<'static, Interface>) {
     runner.run().await
 }
 
-#[task]
 pub async fn connection_task(mut controller: WifiController<'static>) {
     let mut reconnect_delay_secs = INITIAL_RECONNECT_DELAY_SECS;
 
@@ -37,7 +34,6 @@ pub async fn connection_task(mut controller: WifiController<'static>) {
     }
 }
 
-#[task]
 pub async fn status_task(stack: Stack<'static>) {
     loop {
         stack.wait_config_up().await;

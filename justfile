@@ -50,6 +50,7 @@ simulator-run:
 
 simulator-check:
     cargo test -p dashboard-core --locked
+    cargo test -p energydisplay-firmware --lib --locked
     cargo test -p energydisplay-simulator --locked
 
 validate: firmware-validate

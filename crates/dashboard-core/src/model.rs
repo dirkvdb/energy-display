@@ -208,7 +208,8 @@ pub struct Dashboard {
 }
 
 impl Dashboard {
-    pub fn apply(&mut self, update: Update, now: LocalDateTime) {
+    pub fn apply(&mut self, update: Update, now: impl Into<Option<LocalDateTime>>) {
+        let now = now.into();
         match update {
             Update::Heatpump(data) => self.status.heatpump_data = data,
             Update::HeatpumpPower(power) => self.status.heatpump_power = power,
@@ -232,25 +233,29 @@ impl Dashboard {
             }
             Update::Grid(grid) => {
                 self.status.grid = grid;
-                self.status
-                    .grid_export_hourly
-                    .append_value(grid.power_export_today, now);
-                self.status
-                    .grid_import_hourly
-                    .append_value(grid.power_import_today, now);
+                if let Some(now) = now {
+                    self.status
+                        .grid_export_hourly
+                        .append_value(grid.power_export_today, now);
+                    self.status
+                        .grid_import_hourly
+                        .append_value(grid.power_import_today, now);
+                }
             }
         }
     }
 
-    fn update_combined_solar(&mut self, now: LocalDateTime) {
+    fn update_combined_solar(&mut self, now: Option<LocalDateTime>) {
         self.status.solar_current_home = self.solar.pv_total_power();
         self.status.solar_current_garage = self.garage_solar.pv_total_power;
         self.status.solar_current =
             self.status.solar_current_home + self.status.solar_current_garage;
         self.status.solar_today = self.solar.energy_today + self.garage_solar.energy_today;
-        self.status
-            .solar_production_hourly
-            .append_value(self.status.solar_today, now);
+        if let Some(now) = now {
+            self.status
+                .solar_production_hourly
+                .append_value(self.status.solar_today, now);
+        }
     }
 }
 
@@ -307,6 +312,139 @@ mod tests {
         assert_eq!(dashboard.status.solar_current_garage, 750.0);
         assert_eq!(dashboard.status.solar_current, 3250.0);
         assert_eq!(dashboard.status.solar_today, 10.75);
+    }
+
+    #[test]
+    fn unsynced_readings_update_live_data_without_initializing_hourly_buckets() {
+        let mut dashboard = Dashboard::default();
+        let heatpump = HeatpumpData {
+            indoor_temperature: 21.0,
+            outdoor_temperature: 12.0,
+            dhw_temperature: 45.0,
+        };
+        let sensor = TemperatureData {
+            temperature: 13.0,
+            humidity: 65.0,
+        };
+        let grid = GridData {
+            power_import: 500.0,
+            power_export: 100.0,
+            power_import_today: 4.0,
+            power_export_today: 2.0,
+            quarterly_peak_current: 1500.0,
+            quarterly_peak_month: 2000.0,
+            quarterly_peak_year: 2500.0,
+        };
+        for update in [
+            Update::Heatpump(heatpump),
+            Update::HeatpumpPower(1200),
+            Update::HeatpumpBackupPower(3000),
+            Update::HeatpumpCop(3.5),
+            Update::HeatpumpRecommend(true),
+            Update::HeatpumpForce(true),
+            Update::OutdoorSensor(sensor),
+            Update::Solar(SolarData {
+                output_power: 2700.0,
+                energy_today: 8.5,
+                battery_charge_power: 400.0,
+                battery_discharge_power: 200.0,
+                battery_state_of_charge: 60.0,
+                battery_discharge_energy_today: 1.5,
+                battery_charge_energy_today: 2.5,
+            }),
+            Update::GarageSolar(GarageSolarData {
+                pv_total_power: 750.0,
+                energy_today: 2.25,
+            }),
+            Update::Grid(grid),
+        ] {
+            dashboard.apply(update, None);
+            assert_eq!(
+                dashboard.status.solar_production_hourly,
+                HourlyData::default()
+            );
+            assert_eq!(dashboard.status.grid_import_hourly, HourlyData::default());
+            assert_eq!(dashboard.status.grid_export_hourly, HourlyData::default());
+        }
+
+        assert_eq!(
+            dashboard.status,
+            EnergyStatus {
+                grid,
+                solar_current: 3250.0,
+                solar_current_home: 2500.0,
+                solar_current_garage: 750.0,
+                solar_today: 10.75,
+                battery_percentage: 60.0,
+                battery_charge_current: 400.0,
+                battery_discharge_current: 200.0,
+                battery_discharge_energy_today: 1.5,
+                battery_charge_energy_today: 2.5,
+                heatpump_recommend: true,
+                heatpump_force: true,
+                heatpump_data: heatpump,
+                heatpump_power: 1200,
+                heatpump_power_buh: 3000,
+                heatpump_cop: 3.5,
+                outdoor_sensor: sensor,
+                ..EnergyStatus::default()
+            }
+        );
+    }
+
+    #[test]
+    fn first_synced_readings_establish_hourly_baselines() {
+        // Either solar source can provide the first timestamped reading.
+        for sync_home_first in [false, true] {
+            let mut dashboard = Dashboard::default();
+            let mut solar = SolarData {
+                energy_today: 8.0,
+                ..SolarData::default()
+            };
+            let mut garage = GarageSolarData {
+                energy_today: 2.0,
+                ..GarageSolarData::default()
+            };
+            let mut grid = GridData {
+                power_import_today: 4.0,
+                power_export_today: 2.0,
+                ..GridData::default()
+            };
+            dashboard.apply(Update::Solar(solar), None);
+            dashboard.apply(Update::GarageSolar(garage), None);
+            dashboard.apply(Update::Grid(grid), None);
+
+            for step in 0..2 {
+                let solar_update = if sync_home_first {
+                    solar.energy_today += 0.5;
+                    Update::Solar(solar)
+                } else {
+                    garage.energy_today += 0.5;
+                    Update::GarageSolar(garage)
+                };
+                grid.power_import_today += 0.25;
+                grid.power_export_today += 0.5;
+                dashboard.apply(solar_update, Some(MORNING));
+                dashboard.apply(Update::Grid(grid), Some(MORNING));
+
+                for (hourly, baseline, increment) in [
+                    (&dashboard.status.solar_production_hourly, 10.5, 500.0),
+                    (&dashboard.status.grid_import_hourly, 4.25, 250.0),
+                    (&dashboard.status.grid_export_hourly, 2.5, 500.0),
+                ] {
+                    let mut baselines = [0.0; 24];
+                    let mut values = [0.0; 24];
+                    let mut present = [false; 24];
+                    baselines[10] = baseline;
+                    values[10] = f64::from(step) * increment;
+                    present[10] = true;
+                    assert_eq!(hourly.values_at_hour_start, baselines);
+                    assert_eq!(hourly.values, values);
+                    assert_eq!(hourly.baseline_present, present);
+                    assert_eq!(hourly.last_update, Some(MORNING));
+                }
+            }
+        }
     }
 
     #[test]

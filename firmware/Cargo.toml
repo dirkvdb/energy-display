@@ -9,10 +9,14 @@ publish = false
 dashboard-core = { path = "../crates/dashboard-core" }
 embedded-graphics = "=0.8.2"
 embassy-futures = "=0.1.2"
-embassy-net = { version = "=0.9.1", features = ["dhcpv4", "medium-ethernet", "tcp"] }
+embassy-net = { version = "=0.9.1", features = ["dhcpv4", "medium-ethernet", "tcp", "udp"] }
 embassy-sync = "=0.8.0"
 embassy-time = "=0.5.1"
 log = "=0.4.34"
+jiff = { version = "=0.2.35", default-features = false, features = ["static"] }
+sntpc = { version = "=0.11.0", default-features = false }
+sntpc-net-embassy = { version = "=0.11.0", default-features = false }
+sntpc-time-embassy = { version = "=0.6.0", default-features = false }
 rust-mqtt = { version = "=0.5.1", default-features = false, features = ["v5", "bump"] }
 
 [target.'cfg(target_arch = "xtensa")'.dependencies]

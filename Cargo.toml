@@ -12,5 +12,5 @@ opt-level = 3
 [profile.release]
 codegen-units = 1
 debug = 2
-lto = "fat"
+lto = "thin"
 opt-level = "s"

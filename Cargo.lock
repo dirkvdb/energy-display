@@ -968,8 +968,12 @@ dependencies = [
  "esp-println",
  "esp-radio",
  "esp-rtos",
+ "jiff",
  "log",
  "rust-mqtt",
+ "sntpc",
+ "sntpc-net-embassy",
+ "sntpc-time-embassy",
  "st7305",
  "static_cell",
 ]
@@ -1797,10 +1801,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a69dcb3a21cfb32ce1cd056169337ca284af0766dd766e7878819b251a49204"
 dependencies = [
  "jiff-core",
+ "jiff-tzdb",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
 ]
+
+[[package]]
+name = "jiff-tzdb"
+version = "0.1.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "142bd39932ad231f10513df9ab62661fead8719872150b7ad02a2df79f4e141e"
 
 [[package]]
 name = "lazy_static"
@@ -2525,6 +2536,35 @@ dependencies = [
  "defmt 0.3.100",
  "heapless 0.9.3",
  "managed",
+]
+
+[[package]]
+name = "sntpc"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "294278b134cd7d06d7f22eca970aebe38707864c080f66547f9ad26327534af3"
+dependencies = [
+ "cfg-if",
+]
+
+[[package]]
+name = "sntpc-net-embassy"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "97d4addcbed51e6aa5178ba85834d1748b70da0f3df4552382a10afbfe285ae3"
+dependencies = [
+ "embassy-net",
+ "sntpc",
+]
+
+[[package]]
+name = "sntpc-time-embassy"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "184c354de440d7b2e95a547eb16f2527a1eba1bb666f322782cdb4d4668fc66f"
+dependencies = [
+ "embassy-time",
+ "sntpc",
 ]
 
 [[package]]

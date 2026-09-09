@@ -67,7 +67,7 @@ impl DashboardRenderer {
         &mut self,
         display: &mut D,
         status: &EnergyStatus,
-        now: LocalDateTime,
+        now: impl Into<Option<LocalDateTime>>,
     ) -> Result<(), D::Error>
     where
         D: DrawTarget<Color = BinaryColor>,
@@ -97,7 +97,7 @@ impl DashboardRenderer {
         self.render_energy_row(display, energy, status)?;
         self.render_battery_row(display, battery, status)?;
         self.render_graph(display, graph, status)?;
-        self.render_status_bar(display, status_bar, now)?;
+        self.render_status_bar(display, status_bar, now.into())?;
         self.render_heatpump_row(display, heatpump, status)?;
         draw_rectangle(display, outer, BLACK, None)?;
         Ok(())
@@ -330,7 +330,7 @@ impl DashboardRenderer {
         &mut self,
         display: &mut D,
         bounds: Rectangle,
-        now: LocalDateTime,
+        now: Option<LocalDateTime>,
     ) -> Result<(), D::Error>
     where
         D: DrawTarget<Color = BinaryColor>,
@@ -339,9 +339,12 @@ impl DashboardRenderer {
             Point::new(8, bounds.top_left.y),
             Size::new(384, bounds.size.height),
         );
+        let date = now.map(|now| formatting::date(now.year, now.month, now.day, now.weekday));
+        let time = now.map(|now| formatting::time(now.hour, now.minute));
         self.font_renderer.draw_text(
             display,
-            formatting::date(now.year, now.month, now.day, now.weekday).as_str(),
+            date.as_ref()
+                .map_or("Waiting for time", |date| date.as_str()),
             inset,
             BLACK,
             FONT_SIZE_STATUS,
@@ -349,7 +352,7 @@ impl DashboardRenderer {
         )?;
         self.font_renderer.draw_text(
             display,
-            formatting::time(now.hour, now.minute).as_str(),
+            time.as_ref().map_or("--:--", |time| time.as_str()),
             inset,
             BLACK,
             FONT_SIZE_STATUS,
