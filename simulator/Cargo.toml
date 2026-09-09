@@ -1,0 +1,11 @@
+[package]
+name = "energydisplay-simulator"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+publish = false
+
+[dependencies]
+embedded-graphics = "=0.8.2"
+embedded-graphics-simulator = "=0.8.0"
+energydisplay-firmware = { path = "../firmware" }
