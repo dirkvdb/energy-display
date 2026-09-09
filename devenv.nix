@@ -2,6 +2,21 @@
 
 let
   espToolchainVersion = "1.97.0.0";
+  bitterProBlackFont = ./assets/fonts/BitterPro-Black.otf;
+  bitterProBlackSubset =
+    pkgs.runCommand "energy-display-bitter-pro-black.otf"
+      {
+        nativeBuildInputs = [ pkgs.python3Packages.fonttools ];
+      }
+      ''
+        pyftsubset "${bitterProBlackFont}" \
+          --output-file="$out" \
+          --unicodes=U+0020-007E,U+00B0,U+2191,U+2193 \
+          --no-ignore-missing-unicodes \
+          '--name-IDs=*' \
+          --name-legacy \
+          '--name-languages=*'
+      '';
   materialDesignIconsFont = "${pkgs.material-design-icons}/share/fonts/truetype/materialdesignicons-webfont.ttf";
   materialDesignIconsSubset =
     pkgs.runCommand "energy-display-material-design-icons.ttf"
@@ -33,6 +48,7 @@ in
   env.CARGO_HOME = config.env.DEVENV_STATE + "/cargo";
   env.ESPUP_EXPORT_FILE = config.env.DEVENV_STATE + "/export-esp.sh";
   env.ESPUP_TOOLCHAIN_VERSION = espToolchainVersion;
+  env.BITTER_PRO_BLACK_FONT = bitterProBlackSubset;
   env.MATERIAL_DESIGN_ICONS_FONT = materialDesignIconsSubset;
   env.LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [ pkgs.SDL2 ];
 

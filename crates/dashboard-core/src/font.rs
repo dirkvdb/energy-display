@@ -10,8 +10,7 @@ use embedded_graphics::{
     text::Alignment,
 };
 
-const BITTER_PRO_BLACK: &[u8; 269_356] =
-    include_bytes!("../../../assets/fonts/BitterPro-Black.otf");
+const BITTER_PRO_BLACK: &[u8] = include_bytes!(env!("BITTER_PRO_BLACK_FONT"));
 const MATERIAL_DESIGN_ICONS: &[u8] = include_bytes!(env!("MATERIAL_DESIGN_ICONS_FONT"));
 const TEXT_FONT_FAMILY: &str = "Bitter Pro";
 const ICON_FONT_FAMILY: &str = "Material Design Icons";

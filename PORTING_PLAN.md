@@ -25,7 +25,7 @@ Implementation starts with hardware proof, before source fixtures, networking, o
 
 The workspace now includes `crates/dashboard-core`, a `no_std` implementation of the active model, exact live MQTT topic/payload decoding, corrected explicit-time hourly aggregation, allocation-free formatting, and the complete Advanced dashboard geometry/graph. Both the simulator and firmware render the source `inkytool test` fixture through this shared code.
 
-Bitter Pro Black parity is complete: the shared renderer uses `cosmic-text` 0.19 in `no_std + alloc` mode with the source font sizes, advanced shaping, monochrome threshold, alignment, and ink-bound vertical centering. The source's Font Awesome Pro asset was not copied because its redistribution terms are not documented in the source checkout. The grid, solar, heating, shower, and center backup-heater symbols use the Apache-2.0 Material Design Icons `lightning-bolt`, `solar-power-variant-outline`, `heating-coil`, `shower-head`, and `recycle-variant` glyphs, subset from the Nixpkgs font during environment construction; other monochrome symbols retain their local geometry. Networking, live wall time, retained summary handling, and app-task integration remain later milestones.
+Bitter Pro Black parity is complete: the shared renderer uses `cosmic-text` 0.19 in `no_std + alloc` mode with the source font sizes, advanced shaping, monochrome threshold, alignment, and ink-bound vertical centering. Nix derives a metadata-preserving subset containing printable ASCII plus `°`, `↑`, and `↓` before embedding the font. The source's Font Awesome Pro asset was not copied because its redistribution terms are not documented in the source checkout. The grid, solar, heating, shower, and center backup-heater symbols use the Apache-2.0 Material Design Icons `lightning-bolt`, `solar-power-variant-outline`, `heating-coil`, `shower-head`, and `recycle-variant` glyphs, subset from the Nixpkgs font during environment construction; other monochrome symbols retain their local geometry. Networking, live wall time, retained summary handling, and app-task integration remain later milestones.
 
 ### Deliverables
 
@@ -275,7 +275,7 @@ The source uses proportional Bitter Pro Black text and Font Awesome Pro icons th
 
 **Implemented:**
 
-1. Embed the OFL-licensed Bitter Pro Black OTF in flash.
+1. Subset the OFL-licensed Bitter Pro Black OTF to printable ASCII plus `°`, `↑`, and `↓`, preserve its family/weight metadata, and embed the derived OTF in flash.
 2. Reuse `cosmic-text` 0.19 with `default-features = false` and features `no_std` and `swash`, rather than maintaining a custom font generator or bitmap renderer.
 3. Preserve the source's advanced shaping and sizes: 43 px main values, 32 px split values, 29 px battery values, 23 px subtext, and 18 px status text.
 4. Preserve the source's `alpha > 127` monochrome threshold, horizontal alignment, and vertical centering based on actual rendered ink bounds.
