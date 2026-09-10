@@ -248,6 +248,7 @@ fn decode_event(event: Event<'_, MAX_SUBSCRIPTION_IDENTIFIERS>) -> Option<Update
     let topic = publication.topic.as_ref().as_str();
     match decode_update(topic, publication.message.as_bytes()) {
         Ok(update) => Some(update),
+        Err(dashboard_core::routing::DecodeError::IgnoredTopic) => None,
         Err(error) => {
             mqtt_log!("mqtt: rejected payload on {}: {:?}", topic, error);
             None

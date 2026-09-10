@@ -11,6 +11,7 @@ pub const HEATPUMP_POWER_TOPIC: &str = "home/zigbee/HeatpumpPower";
 pub const HEATPUMP_BACKUP_POWER_TOPIC: &str = "home/zigbee/HeatpumpPowerBUH";
 pub const HEATPUMP_STATUS_FILTER: &str = "energy/heatpump/status/#";
 pub const HEATPUMP_COP_TOPIC: &str = "energy/heatpump/status/cop";
+pub const HEATPUMP_MODE_TOPIC: &str = "energy/heatpump/status/mode";
 pub const HEATPUMP_RECOMMEND_TOPIC: &str = "energy/heatpump/status/relay/recommend";
 pub const HEATPUMP_FORCE_TOPIC: &str = "energy/heatpump/status/relay/force";
 pub const OUTDOOR_SENSOR_TOPIC: &str = "home/zigbee/BuitenSensor";
@@ -33,6 +34,7 @@ pub const LIVE_SUBSCRIPTIONS: [&str; 8] = [
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DecodeError {
     UnknownTopic,
+    IgnoredTopic,
     InvalidUtf8,
     InvalidPayload,
     TrailingData,
@@ -48,6 +50,7 @@ pub fn decode_update(topic: &str, payload: &[u8]) -> Result<Update, DecodeError>
             decode_json::<PowerData>(payload).map(|data| Update::HeatpumpBackupPower(data.power))
         }
         HEATPUMP_COP_TOPIC => decode_number(payload).map(Update::HeatpumpCop),
+        HEATPUMP_MODE_TOPIC => Err(DecodeError::IgnoredTopic),
         HEATPUMP_RECOMMEND_TOPIC => decode_relay(payload).map(Update::HeatpumpRecommend),
         HEATPUMP_FORCE_TOPIC => decode_relay(payload).map(Update::HeatpumpForce),
         OUTDOOR_SENSOR_TOPIC => decode_json(payload).map(Update::OutdoorSensor),
@@ -169,6 +172,10 @@ mod tests {
 
     #[test]
     fn topic_matching_is_exact() {
+        assert_eq!(
+            decode_update(HEATPUMP_MODE_TOPIC, b"Logic"),
+            Err(DecodeError::IgnoredTopic)
+        );
         assert_eq!(
             decode_update(HEATPUMP_STATUS_FILTER, b"ON"),
             Err(DecodeError::UnknownTopic)
