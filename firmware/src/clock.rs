@@ -24,12 +24,9 @@ static CLOCK: Mutex<CriticalSectionRawMutex, RefCell<Option<Anchor>>> =
     Mutex::new(RefCell::new(None));
 
 macro_rules! clock_log {
-    ($level:ident, $($arg:tt)*) => {{
-        #[cfg(target_arch = "xtensa")]
-        esp_println::println!($($arg)*);
-        #[cfg(not(target_arch = "xtensa"))]
-        log::$level!($($arg)*);
-    }};
+    ($level:ident, $($arg:tt)*) => {
+        log::$level!($($arg)*)
+    };
 }
 
 #[derive(Clone, Copy)]

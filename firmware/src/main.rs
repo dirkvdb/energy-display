@@ -1,6 +1,9 @@
 #![no_std]
 #![no_main]
 
+extern crate alloc;
+
+use alloc::boxed::Box;
 use dashboard_core::{Dashboard, DashboardRenderer};
 use display_interface_spi::SPIInterface;
 use embassy_executor::Spawner;
@@ -12,8 +15,8 @@ use embassy_net::StackResources;
 use embassy_time::{Duration, Ticker};
 use embedded_hal_bus::spi::ExclusiveDevice;
 use energydisplay_firmware::{
-    board, clock, config, display,
-    tasks::{mqtt, net},
+    board, clock, config, display, logging,
+    tasks::{mqtt, net, structured_log},
 };
 use esp_backtrace as _;
 use esp_hal::{
@@ -27,39 +30,38 @@ use esp_hal::{
     time::Rate,
     timer::timg::TimerGroup,
 };
-use esp_println::println;
 use esp_radio::wifi::{
     AuthenticationMethodConfig, Config as WifiConfig, ControllerConfig, Interface, WifiController,
     sta::StationConfig,
 };
+use log::info;
 use st7305::{Orientation, St7305};
 use static_cell::StaticCell;
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
-// DHCP, MQTT TCP, and SNTP UDP each need a socket slot.
-static NETWORK_RESOURCES: StaticCell<StackResources<3>> = StaticCell::new();
+// MQTT, SNTP, and structured-log HTTP can all run alongside DHCP.
 static MQTT_BUFFERS: StaticCell<mqtt::Buffers> = StaticCell::new();
 
 #[esp_hal::main]
-async fn main(_spawner: Spawner) -> ! {
-    println!("energydisplay firmware starting");
-
+async fn main(spawner: Spawner) -> ! {
     let peripherals = esp_hal::init(esp_hal::Config::default());
+    logging::initialize();
+    info!("energydisplay firmware starting");
     esp_alloc::heap_allocator!(#[ram(reclaimed)] size: board::RADIO_HEAP_SIZE);
     esp_alloc::heap_allocator!(size: board::FONT_HEAP_SIZE);
 
     let timer_group = TimerGroup::new(peripherals.TIMG0);
     esp_rtos::start(timer_group.timer0, peripherals.FROM_CPU_INTR0);
 
-    println!(
+    info!(
         "ST7305 native={}x{}, logical={}x{} landscape",
         board::DISPLAY_NATIVE_WIDTH,
         board::DISPLAY_NATIVE_HEIGHT,
         board::DISPLAY_WIDTH,
         board::DISPLAY_HEIGHT,
     );
-    println!(
+    info!(
         "SPI mode {} at {}MHz: SCLK=GPIO{}, MOSI=GPIO{}, DC=GPIO{}, CS=GPIO{}, RESET=GPIO{}; TE=GPIO{} unused",
         board::DISPLAY_SPI_MODE,
         board::DISPLAY_SPI_FREQUENCY_MHZ,
@@ -89,27 +91,27 @@ async fn main(_spawner: Spawner) -> ! {
     let interface = SPIInterface::new(spi_device, data_command);
     let mut panel = St7305::new(interface, reset);
 
-    println!("display: initializing ST7305");
+    info!("display: initializing ST7305");
     let mut delay = embassy_time::Delay;
     panel.init_async(&mut delay).await.unwrap();
     panel.set_orientation(Orientation::Landscape);
-    println!("display: ST7305 initialized");
+    info!("display: ST7305 initialized");
 
     let mut dashboard = Dashboard::default();
-    println!("display: initializing dashboard renderer");
+    info!("display: initializing dashboard renderer");
     let mut renderer = DashboardRenderer::new();
-    println!("display: dashboard renderer initialized");
+    info!("display: dashboard renderer initialized");
 
     display::clear_white(&mut panel);
-    println!("display: framebuffer cleared; rendering empty dashboard");
+    info!("display: framebuffer cleared; rendering empty dashboard");
     renderer
         .render(&mut panel, &dashboard.status, clock::now())
         .unwrap();
-    println!("display: empty dashboard rasterized; flushing panel");
+    info!("display: empty dashboard rasterized; flushing panel");
     panel.flush().unwrap();
-    println!("display: empty dashboard rendered");
+    info!("display: empty dashboard rendered");
     let heap_stats = esp_alloc::HEAP.stats();
-    println!(
+    info!(
         "heap: {} of {} bytes used after display initialization",
         heap_stats.current_usage, heap_stats.size
     );
@@ -128,7 +130,7 @@ async fn main(_spawner: Spawner) -> ! {
             )),
     );
 
-    println!("wifi: initializing station");
+    info!("wifi: initializing station");
     let wifi_interface = Interface::station();
     let controller = WifiController::new(
         peripherals.WIFI,
@@ -138,17 +140,21 @@ async fn main(_spawner: Spawner) -> ! {
 
     let rng = Rng::new();
     let seed = (rng.random() as u64) << 32 | rng.random() as u64;
+    let network_resources: &'static mut StackResources<4> =
+        Box::leak(Box::new(StackResources::new()));
     let (stack, runner) = embassy_net::new(
         wifi_interface,
         embassy_net::Config::dhcpv4(Default::default()),
-        NETWORK_RESOURCES.init(StackResources::new()),
+        network_resources,
         seed,
     );
     let heap_stats = esp_alloc::HEAP.stats();
-    println!(
+    info!(
         "heap: {} of {} bytes used after display and network initialization",
         heap_stats.current_usage, heap_stats.size
     );
+
+    spawner.spawn(structured_log::task(stack).unwrap());
 
     // Borrow the large panel/dashboard state instead of moving it into a second
     // future, which creates large temporaries in the main task's poll frame.

@@ -24,12 +24,7 @@ use crate::config;
 
 macro_rules! mqtt_log {
     ($($arg:tt)*) => {
-        {
-            #[cfg(target_arch = "xtensa")]
-            esp_println::println!($($arg)*);
-            #[cfg(not(target_arch = "xtensa"))]
-            log::info!($($arg)*);
-        }
+        log::info!($($arg)*)
     };
 }
 
@@ -100,12 +95,12 @@ pub async fn run(stack: Stack<'static>, buffers: &'static mut Buffers) {
         {
             Ok(Ok(())) => mqtt_log!("mqtt: TCP connected"),
             Ok(Err(error)) => {
-                mqtt_log!("mqtt: TCP connection failed: {:?}", error);
+                log::warn!("mqtt: TCP connection failed: {:?}", error);
                 Timer::after(RECONNECT_DELAY).await;
                 continue;
             }
             Err(_) => {
-                mqtt_log!("mqtt: TCP connection timed out");
+                log::warn!("mqtt: TCP connection timed out");
                 Timer::after(RECONNECT_DELAY).await;
                 continue;
             }
@@ -137,13 +132,13 @@ pub async fn run(stack: Stack<'static>, buffers: &'static mut Buffers) {
         {
             Ok(Ok(info)) => info.session_present,
             Ok(Err(error)) => {
-                mqtt_log!("mqtt: handshake failed: {:?}", error);
+                log::warn!("mqtt: handshake failed: {:?}", error);
                 session = client.session().clone();
                 Timer::after(RECONNECT_DELAY).await;
                 continue;
             }
             Err(_) => {
-                mqtt_log!("mqtt: handshake timed out");
+                log::warn!("mqtt: handshake timed out");
                 session = client.session().clone();
                 Timer::after(RECONNECT_DELAY).await;
                 continue;
@@ -155,7 +150,7 @@ pub async fn run(stack: Stack<'static>, buffers: &'static mut Buffers) {
 
         match run_session(&mut client, session_present).await {
             Ok(never) => match never {},
-            Err(error) => mqtt_log!("mqtt: session failed: {:?}", error),
+            Err(error) => log::warn!("mqtt: session failed: {:?}", error),
         }
 
         client.abort().await;
@@ -214,7 +209,7 @@ async fn subscribe<'a>(
         let update = match event {
             Event::Suback(ack) if ack.packet_identifier == packet_identifier => {
                 if ack.reason_code != ReasonCode::GrantedQoS2 {
-                    mqtt_log!(
+                    log::warn!(
                         "mqtt: broker rejected QoS 2 subscription to {}: {:?}",
                         topic,
                         ack.reason_code
@@ -250,7 +245,7 @@ fn decode_event(event: Event<'_, MAX_SUBSCRIPTION_IDENTIFIERS>) -> Option<Update
         Ok(update) => Some(update),
         Err(dashboard_core::routing::DecodeError::IgnoredTopic) => None,
         Err(error) => {
-            mqtt_log!("mqtt: rejected payload on {}: {:?}", topic, error);
+            log::warn!("mqtt: rejected payload on {}: {:?}", topic, error);
             None
         }
     }
