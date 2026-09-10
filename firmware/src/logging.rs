@@ -1,13 +1,12 @@
 use core::{
-    fmt::Write as _,
+    fmt::{self, Write as _},
     sync::atomic::{AtomicU32, Ordering},
 };
 
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
 use log::{Level, Log, Metadata, Record};
 
-const LOG_MESSAGE_CAPACITY: usize = 512;
-pub const STRUCTURED_LOG_MESSAGE_CAPACITY: usize = 1536;
+pub const STRUCTURED_LOG_MESSAGE_CAPACITY: usize = 1024;
 // Structured logging is limited to warnings and errors, so one pending record is enough.
 const STRUCTURED_LOG_QUEUE_CAPACITY: usize = 1;
 const STRUCTURED_LOG_APP_NAME: &str = "energydisplay";
@@ -38,20 +37,15 @@ impl Log for FanoutLogger {
         serial(record);
 
         if record.level() <= Level::Warn {
-            let mut rendered = heapless::String::<LOG_MESSAGE_CAPACITY>::new();
-            let _ = write!(rendered, "{}", record.args());
-            let structured = format_structured_log_message(record, rendered.as_str());
-            if STRUCTURED_LOG_QUEUE.try_send(structured).is_err() {
-                STRUCTURED_LOG_DROPPED.fetch_add(1, Ordering::Relaxed);
-            }
+            enqueue_structured(record);
         }
     }
 
     fn flush(&self) {}
 }
 
-/// Installs the logger that mirrors every application record to serial and to
-/// the structured-log forwarding queue.
+/// Installs the logger that mirrors every application record to serial and
+/// queues warning/error records for structured forwarding.
 pub fn initialize() {
     if log::set_logger(&LOGGER).is_err() {
         panic!("global logger already initialized");
@@ -73,13 +67,25 @@ fn serial(record: &Record<'_>) {
 
 /// Writes an internal forwarding diagnostic to serial without feeding it back
 /// into the structured-log queue.
-pub fn serial_only(level: Level, arguments: core::fmt::Arguments<'_>) {
+pub fn serial_only(level: Level, arguments: fmt::Arguments<'_>) {
     let record = Record::builder()
         .args(arguments)
         .level(level)
         .target("logging")
         .build();
     serial(&record);
+}
+
+// Keep the structured formatter and its buffer out of the hot path used by
+// every serial info record. Inlining this function adds several KiB to each
+// MQTT logging call's stack frame on Xtensa.
+#[cold]
+#[inline(never)]
+fn enqueue_structured(record: &Record<'_>) {
+    let structured = format_structured_log_message(record);
+    if STRUCTURED_LOG_QUEUE.try_send(structured).is_err() {
+        STRUCTURED_LOG_DROPPED.fetch_add(1, Ordering::Relaxed);
+    }
 }
 
 fn level_name(level: Level) -> &'static str {
@@ -92,25 +98,44 @@ fn level_name(level: Level) -> &'static str {
     }
 }
 
+struct JsonWriter<'a, const N: usize> {
+    output: &'a mut heapless::String<N>,
+}
+
+impl<const N: usize> fmt::Write for JsonWriter<'_, N> {
+    fn write_str(&mut self, value: &str) -> fmt::Result {
+        for character in value.chars() {
+            let result = match character {
+                '"' => self.output.push_str("\\\""),
+                '\\' => self.output.push_str("\\\\"),
+                '\n' => self.output.push_str("\\n"),
+                '\r' => self.output.push_str("\\r"),
+                '\t' => self.output.push_str("\\t"),
+                character if character <= '\u{1f}' => {
+                    write!(self.output, "\\u{:04x}", character as u32)?;
+                    continue;
+                }
+                character => self.output.push(character),
+            };
+            result.map_err(|_| fmt::Error)?;
+        }
+        Ok(())
+    }
+}
+
 fn json_string<const N: usize>(output: &mut heapless::String<N>, value: &str) {
     output.push('"').ok();
-    for character in value.chars() {
-        match character {
-            '"' => output.push_str("\\\"").ok(),
-            '\\' => output.push_str("\\\\").ok(),
-            '\n' => output.push_str("\\n").ok(),
-            '\r' => output.push_str("\\r").ok(),
-            '\t' => output.push_str("\\t").ok(),
-            character if character <= '\u{1f}' => {
-                write!(output, "\\u{:04x}", character as u32).ok()
-            }
-            character => output.push(character).ok(),
-        };
-    }
+    JsonWriter { output }.write_str(value).ok();
     output.push('"').ok();
 }
 
-fn format_structured_log_message(record: &Record<'_>, message: &str) -> StructuredLogMessage {
+fn json_arguments<const N: usize>(output: &mut heapless::String<N>, value: &fmt::Arguments<'_>) {
+    output.push('"').ok();
+    fmt::write(&mut JsonWriter { output }, value.clone()).ok();
+    output.push('"').ok();
+}
+
+fn format_structured_log_message(record: &Record<'_>) -> StructuredLogMessage {
     let mut output = StructuredLogMessage::new();
     output.push('{').ok();
     output.push_str("\"app_name\":").ok();
@@ -131,9 +156,9 @@ fn format_structured_log_message(record: &Record<'_>, message: &str) -> Structur
             .unwrap_or(record.target()),
     );
     output.push_str(",\"message\":").ok();
-    json_string(&mut output, message);
+    json_arguments(&mut output, record.args());
     output.push_str(",\"_msg\":").ok();
-    json_string(&mut output, message);
+    json_arguments(&mut output, record.args());
     output.push_str(",\"target\":").ok();
     json_string(&mut output, record.target());
     if let Some(module_path) = record.module_path() {

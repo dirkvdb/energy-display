@@ -18,7 +18,7 @@ See [`PORTING_PLAN.md`](PORTING_PLAN.md) for the remaining RTC, retained-summary
 
 The host simulator tests against the same deterministic dashboard fixture used by `inkytool test` in `../inky-solar`. Its live mode starts with an empty dashboard, preserves the most recently received state across network outages, and redraws immediately after each valid MQTT update, just like the firmware. On hardware, SNTP synchronizes UTC with `192.168.1.1` and a monotonic-backed software clock presents `Europe/Brussels` local time with CET/CEST transitions. Until the first successful synchronization, the status bar shows `Waiting for time` and hourly aggregation remains uninitialized.
 
-The serial console logs display startup, heap usage, Wi-Fi connection and reconnect state, the DHCP address, NTP synchronization, MQTT connection/subscription state, and payload rejection details.
+The serial console unconditionally logs display startup, heap usage, Wi-Fi connection and reconnect state, the DHCP address, NTP synchronization, MQTT connection/subscription state, and payload rejection details. Warning and error `log` records are also sent asynchronously as structured JSON Lines to Victoria Logs at `192.168.1.13:9428`. If that server is unavailable, serial logging continues and the one-record forwarding queue drops excess records rather than blocking firmware tasks.
 
 ## Development environment
 
@@ -123,9 +123,11 @@ If the panel remains blank or is unstable, keep SPI at 10 MHz and compare the in
 │       ├── board.rs         # Board dimensions, pins, and memory settings
 │       ├── config.rs        # Embedded credentials and MQTT defaults
 │       ├── display.rs       # ST7305 clear/polarity helpers
+│       ├── logging.rs       # Serial + structured JSON fan-out logger
 │       ├── tasks/
 │       │   ├── mqtt.rs      # Bounded MQTT v5 client and typed update channel
-│       │   └── net.rs       # Wi-Fi reconnect, DHCP status, and network runner
+│       │   ├── net.rs       # Wi-Fi reconnect, DHCP status, and network runner
+│       │   └── structured_log.rs # Victoria Logs HTTP forwarder
 │       ├── lib.rs           # Shared board/display adapter
 │       └── main.rs          # Runtime, hardware initialization, and display owner
 ├── simulator/

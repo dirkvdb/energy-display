@@ -80,20 +80,25 @@ pub async fn task(stack: Stack<'static>) -> ! {
 /// Forwards warning and error records to Victoria Logs as JSON Lines.
 async fn run(stack: Stack<'static>) -> ! {
     // The display already reserves a large main stack. Keep the HTTP working
-    // set in the existing firmware heap instead of the task's static storage.
-    let mut buffers = Box::new(Buffers::new());
-    write!(
-        buffers.victoria_url,
-        "http://{}:{}{VICTORIA_PATH}",
-        config::HOME_SERVER_ADDRESS,
-        VICTORIA_LOGS_PORT
-    )
-    .expect("Victoria Logs URL exceeds capacity");
+    // set in the existing firmware heap, and do not allocate it until a record
+    // actually needs forwarding so MQTT startup retains its existing footprint.
+    let mut buffers: Option<Box<Buffers>> = None;
     let dns = FixedIpDns;
     let mut failed = false;
 
     loop {
-        buffers.message = logging::next_structured_log_message().await;
+        let message = logging::next_structured_log_message().await;
+        let buffers = buffers.get_or_insert_with(|| Box::new(Buffers::new()));
+        if buffers.victoria_url.is_empty() {
+            write!(
+                buffers.victoria_url,
+                "http://{}:{}{VICTORIA_PATH}",
+                config::HOME_SERVER_ADDRESS,
+                VICTORIA_LOGS_PORT
+            )
+            .expect("Victoria Logs URL exceeds capacity");
+        }
+        buffers.message = message;
         stack.wait_config_up().await;
 
         buffers.body.clear();

@@ -1,9 +1,8 @@
 #![no_std]
 #![no_main]
 
-extern crate alloc;
+use core::mem::MaybeUninit;
 
-use alloc::boxed::Box;
 use dashboard_core::{Dashboard, DashboardRenderer};
 use display_interface_spi::SPIInterface;
 use embassy_executor::Spawner;
@@ -40,7 +39,10 @@ use static_cell::StaticCell;
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
-// MQTT, SNTP, and structured-log HTTP can all run alongside DHCP.
+// MQTT, SNTP, and structured-log HTTP can all run alongside DHCP. Keep the
+// socket set in stable static storage outside the protected main-stack region.
+#[ram(reclaimed)]
+static mut NETWORK_RESOURCES: MaybeUninit<StackResources<4>> = MaybeUninit::uninit();
 static MQTT_BUFFERS: StaticCell<mqtt::Buffers> = StaticCell::new();
 
 #[esp_hal::main]
@@ -140,8 +142,12 @@ async fn main(spawner: Spawner) -> ! {
 
     let rng = Rng::new();
     let seed = (rng.random() as u64) << 32 | rng.random() as u64;
-    let network_resources: &'static mut StackResources<4> =
-        Box::leak(Box::new(StackResources::new()));
+    // SAFETY: `main` initializes this uninitialized static exactly once and
+    // Embassy owns the returned reference for the rest of the program.
+    let network_resources = unsafe {
+        let storage = core::ptr::addr_of_mut!(NETWORK_RESOURCES);
+        (*storage).write(StackResources::new())
+    };
     let (stack, runner) = embassy_net::new(
         wifi_interface,
         embassy_net::Config::dhcpv4(Default::default()),
