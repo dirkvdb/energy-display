@@ -63,6 +63,7 @@ impl DashboardRenderer {
         self
     }
 
+    /// Draws a complete dashboard onto a target that has been cleared to white.
     pub fn render<D>(
         &mut self,
         display: &mut D,
@@ -80,8 +81,6 @@ impl DashboardRenderer {
         let width = (bottom_right.x - top_left.x) as u32;
         let height = (bottom_right.y - top_left.y) as u32;
         let outer = Rectangle::new(top_left, Size::new(width, height));
-        draw_rectangle(display, outer, BLACK, Some(WHITE))?;
-
         let energy = Rectangle::new(top_left, Size::new(width, ROW_HEIGHT));
         let battery = Rectangle::new(Point::new(top_left.x, 75), Size::new(width, ROW_HEIGHT / 2));
         let status_bar = Rectangle::new(
@@ -140,7 +139,6 @@ impl DashboardRenderer {
             .draw_icon(display, ICON_SOLAR, solar_icon, WHITE, FONT_SIZE_ICON)?;
 
         if self.split_solar_production {
-            draw_rectangle(display, solar_info, WHITE, Some(WHITE))?;
             let left = Rectangle::new(Point::new(277, 1), Size::new(62, 50));
             let right = Rectangle::new(Point::new(333, 1), Size::new(62, 50));
             let subtext = Rectangle::new(Point::new(274, 50), Size::new(124, 25));
@@ -192,7 +190,6 @@ impl DashboardRenderer {
     where
         D: DrawTarget<Color = BinaryColor>,
     {
-        draw_rectangle(display, bounds, BLACK, Some(WHITE))?;
         let icon = Rectangle::new(Point::new(1, 75), Size::new(37, 37));
         let percentage = Rectangle::new(Point::new(37, 75), Size::new(120, 37));
         let power = Rectangle::new(Point::new(157, 75), Size::new(120, 37));
@@ -422,7 +419,9 @@ impl DashboardRenderer {
         } else {
             (BLACK, WHITE)
         };
-        draw_rectangle(display, right, right_background, Some(right_background))?;
+        if right_background == BLACK {
+            draw_rectangle(display, right, BLACK, Some(BLACK))?;
+        }
         self.font_renderer.draw_icon(
             display,
             ICON_HEATING,
@@ -472,7 +471,9 @@ fn draw_text_with_subtext<D>(
 where
     D: DrawTarget<Color = BinaryColor>,
 {
-    draw_rectangle(display, bounds, background, Some(background))?;
+    if background == BLACK {
+        draw_rectangle(display, bounds, BLACK, Some(BLACK))?;
+    }
     let main = Rectangle::new(bounds.top_left, Size::new(bounds.size.width, 45));
     let sub = Rectangle::new(
         Point::new(bounds.top_left.x, bounds.top_left.y + 44),
@@ -508,7 +509,9 @@ fn draw_temperature_with_subtext<D>(
 where
     D: DrawTarget<Color = BinaryColor>,
 {
-    draw_rectangle(display, bounds, background, Some(background))?;
+    if background == BLACK {
+        draw_rectangle(display, bounds, BLACK, Some(BLACK))?;
+    }
     font_renderer.draw_text(
         display,
         text,
@@ -539,7 +542,6 @@ fn draw_grid_flow<D>(
 where
     D: DrawTarget<Color = BinaryColor>,
 {
-    draw_rectangle(display, bounds, WHITE, Some(WHITE))?;
     font_renderer.draw_text(
         display,
         formatting::watts_in_out(status.grid.power_import, status.grid.power_export).as_str(),

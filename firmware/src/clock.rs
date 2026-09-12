@@ -58,8 +58,13 @@ impl fmt::Display for Error {
 
 /// Returns Brussels wall time, or `None` until the first successful synchronization.
 pub fn now() -> Option<LocalDateTime> {
+    local_datetime(utc_now()?)
+}
+
+/// Returns UTC wall time, or `None` until the first successful synchronization.
+pub fn utc_now() -> Option<Timestamp> {
     let anchor = CLOCK.lock(|clock| *clock.borrow())?;
-    local_datetime(timestamp_at(Some(anchor), Instant::now())?)
+    timestamp_at(Some(anchor), Instant::now())
 }
 
 /// Synchronizes UTC over SNTP and keeps the last anchor through network outages.

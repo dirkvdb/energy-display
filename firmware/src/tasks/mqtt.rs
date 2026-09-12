@@ -6,7 +6,10 @@ use dashboard_core::{
 };
 use embassy_futures::select::{Either, select};
 use embassy_net::{Stack, tcp::TcpSocket};
-use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
+use embassy_sync::{
+    blocking_mutex::raw::CriticalSectionRawMutex,
+    channel::{Channel, TrySendError},
+};
 use embassy_time::{Duration, Ticker, Timer, with_timeout};
 use rust_mqtt::{
     buffer::BumpBuffer,
@@ -185,7 +188,7 @@ async fn run_session<'a>(
                 unsafe { client.buffer_mut().reset() };
 
                 if let Some(update) = update {
-                    UPDATES.send(update).await;
+                    queue_update(update);
                 }
             }
             Either::Second(_) => client.ping().await?,
@@ -226,12 +229,20 @@ async fn subscribe<'a>(
         unsafe { client.buffer_mut().reset() };
 
         if let Some(update) = update {
-            UPDATES.send(update).await;
+            queue_update(update);
         }
         if acknowledged {
             mqtt_log!("mqtt: subscribed {}", topic);
             return Ok(());
         }
+    }
+}
+
+fn queue_update(update: Update) {
+    if let Err(TrySendError::Full(update)) = UPDATES.try_send(update) {
+        // The display only needs the latest snapshot; replace the oldest queued update.
+        let _ = UPDATES.try_receive();
+        let _ = UPDATES.try_send(update);
     }
 }
 

@@ -6,6 +6,7 @@ rust-version = "1.95"
 publish = false
 
 [features]
+debug = []
 sim = []
 
 [dependencies]
@@ -33,11 +34,7 @@ embedded-io-async = "=0.7.0"
 embedded-nal-async = "=0.9.0"
 reqwless = { version = "=0.14.0", default-features = false }
 esp-alloc = { git = "https://github.com/esp-rs/esp-hal.git", tag = "esp-hal-v1.2.0", default-features = false, features = ["esp32s3", "global-allocator", "compat"] }
-esp-backtrace = { version = "=0.20.0", features = [
-  "esp32s3",
-  "panic-handler",
-  "println",
-] }
+esp-backtrace = { version = "=0.20.0", features = ["esp32s3", "println"] }
 esp-bootloader-esp-idf = { git = "https://github.com/esp-rs/esp-hal.git", tag = "esp-hal-v1.2.0", features = ["esp32s3"] }
 esp-hal = { git = "https://github.com/esp-rs/esp-hal.git", tag = "esp-hal-v1.2.0", features = ["esp32s3", "unstable"] }
 esp-println = { version = "=0.18.0", features = ["esp32s3"] }

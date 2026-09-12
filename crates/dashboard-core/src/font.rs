@@ -15,6 +15,7 @@ const BITTER_BLACK: &[u8] = include_bytes!(env!("BITTER_BLACK_FONT"));
 const MATERIAL_DESIGN_ICONS: &[u8] = include_bytes!(env!("MATERIAL_DESIGN_ICONS_FONT"));
 const TEXT_FONT_FAMILY: &str = "Bitter";
 const ICON_FONT_FAMILY: &str = "Material Design Icons";
+const PIXEL_BATCH_SIZE: usize = 128;
 
 #[derive(Debug)]
 pub(crate) struct FontRenderer {
@@ -141,6 +142,7 @@ impl FontRenderer {
         let bottom = bounds.top_left.y + bounds.size.height as i32 - 1;
         let bottom_distance = bottom - max_y;
         let vertical_offset = (bottom_distance - top_distance) / 2;
+        let mut pixels = heapless::Vec::<Point, PIXEL_BATCH_SIZE>::new();
         let mut draw_error = None;
         buffer.draw(
             &mut self.swash_cache,
@@ -148,16 +150,23 @@ impl FontRenderer {
             |x, y, _width, _height, glyph_color| {
                 if glyph_color.a() > 127 && draw_error.is_none() {
                     let point = bounds.top_left + Point::new(x, y + vertical_offset);
-                    if let Err(error) = display.draw_iter(core::iter::once(Pixel(point, color))) {
-                        draw_error = Some(error);
+                    if pixels.is_full() {
+                        if let Err(error) = display
+                            .draw_iter(pixels.iter().copied().map(|point| Pixel(point, color)))
+                        {
+                            draw_error = Some(error);
+                            return;
+                        }
+                        pixels.clear();
                     }
+                    pixels.push(point).unwrap();
                 }
             },
         );
 
         match draw_error {
             Some(error) => Err(error),
-            None => Ok(()),
+            None => display.draw_iter(pixels.into_iter().map(|point| Pixel(point, color))),
         }
     }
 }

@@ -53,6 +53,9 @@ simulator-check:
     cargo test -p energydisplay-firmware --lib --locked
     cargo test -p energydisplay-simulator --locked
 
+render-perf:
+    cargo bench -p dashboard-core --bench render --locked
+
 validate: firmware-validate
 
 test: validate simulator-check

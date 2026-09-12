@@ -13,12 +13,14 @@ pub const DISPLAY_DC_GPIO: u8 = 5;
 pub const DISPLAY_CS_GPIO: u8 = 40;
 pub const DISPLAY_RESET_GPIO: u8 = 41;
 pub const DISPLAY_TE_GPIO: u8 = 6;
+pub const BOOT_BUTTON_GPIO: u8 = 0;
+pub const KEY_BUTTON_GPIO: u8 = 18;
 
 /// Regular internal RAM reserved for `cosmic-text`, glyph caches, and radio allocations.
 ///
 /// Keep this bounded so the linker can retain at least 56 KiB for the CPU0 stack. Font shaping and
 /// rasterization use significantly more stack than the networking and display-driver paths.
-pub const FONT_HEAP_SIZE: usize = 172 * 1024;
+pub const FONT_HEAP_SIZE: usize = 169 * 1024;
 /// Boot-time memory reclaimed for the Wi-Fi driver and network allocations.
 pub const RADIO_HEAP_SIZE: usize = 64 * 1024;
 

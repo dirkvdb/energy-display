@@ -14,12 +14,14 @@ use embassy_net::StackResources;
 use embassy_time::{Duration, Ticker};
 use embedded_hal_bus::spi::ExclusiveDevice;
 use energydisplay_firmware::{
-    board, clock, config, display, logging,
-    tasks::{mqtt, net, structured_log},
+    board, clock, config, display, logging, panic_store,
+    tasks::{buttons, mqtt, net, structured_log},
 };
 use esp_backtrace as _;
+#[cfg(feature = "debug")]
+use esp_hal::time::Instant;
 use esp_hal::{
-    gpio::{Level, Output, OutputConfig},
+    gpio::{Input, InputConfig, Level, Output, OutputConfig, Pull},
     ram,
     rng::Rng,
     spi::{
@@ -61,6 +63,11 @@ async fn main(spawner: Spawner) -> ! {
 
     let timer_group = TimerGroup::new(peripherals.TIMG0);
     esp_rtos::start(timer_group.timer0, peripherals.FROM_CPU_INTR0);
+
+    let button_config = InputConfig::default().with_pull(Pull::Up);
+    let boot_button = Input::new(peripherals.GPIO0, button_config);
+    let key_button = Input::new(peripherals.GPIO18, button_config);
+    spawner.spawn(buttons::task(boot_button, key_button).unwrap());
 
     info!(
         "ST7305 native={}x{}, logical={}x{} landscape",
@@ -110,14 +117,27 @@ async fn main(spawner: Spawner) -> ! {
     let mut renderer = DashboardRenderer::new();
     info!("display: dashboard renderer initialized");
 
+    info!("display: clearing framebuffer and rendering empty dashboard");
+    #[cfg(feature = "debug")]
+    let frame_started = Instant::now();
     display::clear_white(&mut panel);
-    info!("display: framebuffer cleared; rendering empty dashboard");
     renderer
         .render(&mut panel, &dashboard.status, clock::now())
         .unwrap();
-    info!("display: empty dashboard rasterized; flushing panel");
+    #[cfg(feature = "debug")]
+    let render_time = frame_started.elapsed();
+    #[cfg(feature = "debug")]
+    let flush_started = Instant::now();
     panel.flush().unwrap();
-    info!("display: empty dashboard rendered");
+    #[cfg(feature = "debug")]
+    let flush_time = flush_started.elapsed();
+    #[cfg(feature = "debug")]
+    info!(
+        "display: empty dashboard render_ms={} flush_ms={} total_ms={}",
+        render_time.as_millis(),
+        flush_time.as_millis(),
+        frame_started.elapsed().as_millis()
+    );
     let heap_stats = esp_alloc::HEAP.stats();
     info!(
         "heap: {} of {} bytes used after display initialization",
@@ -171,20 +191,50 @@ async fn main(spawner: Spawner) -> ! {
     // Borrow the large panel/dashboard state instead of moving it into a second
     // future, which creates large temporaries in the main task's poll frame.
     let display_task = async {
-        let mut clock_tick = Ticker::every(Duration::from_secs(1));
+        const DISPLAY_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
+
+        let mut refresh_tick = Ticker::every(DISPLAY_REFRESH_INTERVAL);
         let mut displayed_time = None;
+        let mut dirty = false;
         loop {
-            let event = select(mqtt::UPDATES.receive(), clock_tick.next()).await;
+            let event = select(mqtt::UPDATES.receive(), refresh_tick.next()).await;
             let now = clock::now();
             match event {
-                Either::First(update) => dashboard.apply(update, now),
-                Either::Second(_) if now == displayed_time => continue,
+                Either::First(update) => {
+                    dashboard.apply(update, now);
+                    dirty = true;
+                    while let Ok(update) = mqtt::UPDATES.try_receive() {
+                        dashboard.apply(update, now);
+                    }
+                    continue;
+                }
+                Either::Second(_) if !dirty && now == displayed_time => continue,
                 Either::Second(_) => {}
             }
+            while let Ok(update) = mqtt::UPDATES.try_receive() {
+                dashboard.apply(update, now);
+            }
+
+            #[cfg(feature = "debug")]
+            let frame_started = Instant::now();
             display::clear_white(&mut panel);
             renderer.render(&mut panel, &dashboard.status, now).unwrap();
+            #[cfg(feature = "debug")]
+            let render_time = frame_started.elapsed();
+            #[cfg(feature = "debug")]
+            let flush_started = Instant::now();
             panel.flush().unwrap();
+            #[cfg(feature = "debug")]
+            let flush_time = flush_started.elapsed();
+            #[cfg(feature = "debug")]
+            info!(
+                "display: dashboard render_ms={} flush_ms={} total_ms={}",
+                render_time.as_millis(),
+                flush_time.as_millis(),
+                frame_started.elapsed().as_millis()
+            );
             displayed_time = now;
+            dirty = false;
         }
     };
 

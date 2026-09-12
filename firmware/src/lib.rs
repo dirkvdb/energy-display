@@ -7,4 +7,5 @@ pub mod clock;
 pub mod config;
 pub mod display;
 pub mod logging;
+pub mod panic_store;
 pub mod tasks;
