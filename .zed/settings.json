@@ -1,0 +1,39 @@
+{
+  "lsp": {
+    "rust-analyzer": {
+      "initialization_options": {
+        "cargo": {
+          "allTargets": false,
+          "buildScripts": {
+            "overrideCommand": [
+              "cargo",
+              "check",
+              "-p",
+              "energydisplay-firmware",
+              "--target",
+              "xtensa-esp32s3-none-elf",
+              "-Z",
+              "build-std=core,alloc",
+              "--message-format=json"
+            ]
+          },
+          "target": "xtensa-esp32s3-none-elf"
+        },
+        "check": {
+          "allTargets": false,
+          "overrideCommand": [
+            "cargo",
+            "check",
+            "-p",
+            "energydisplay-firmware",
+            "--target",
+            "xtensa-esp32s3-none-elf",
+            "-Z",
+            "build-std=core,alloc",
+            "--message-format=json"
+          ]
+        }
+      }
+    }
+  }
+}
