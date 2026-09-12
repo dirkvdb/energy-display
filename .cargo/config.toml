@@ -7,5 +7,6 @@ linker = "xtensa-esp32s3-elf-gcc"
 rustflags = [
   "-C",
   "link-arg=-Tlinkall.x",
+  "-C",
+  "link-arg=-Wl,--no-warn-rwx-segments",
 ]
-
