@@ -12,7 +12,29 @@ const STRUCTURED_LOG_QUEUE_CAPACITY: usize = 1;
 const STRUCTURED_LOG_APP_NAME: &str = "energydisplay";
 const STRUCTURED_LOG_HOSTNAME: &str = "energydisplay";
 
-pub type StructuredLogMessage = heapless::String<STRUCTURED_LOG_MESSAGE_CAPACITY>;
+pub struct StructuredLogMessage {
+    json: heapless::String<STRUCTURED_LOG_MESSAGE_CAPACITY>,
+    persisted_panic: bool,
+}
+
+impl StructuredLogMessage {
+    pub fn empty() -> Self {
+        Self {
+            json: heapless::String::new(),
+            persisted_panic: false,
+        }
+    }
+
+    pub fn is_persisted_panic(&self) -> bool {
+        self.persisted_panic
+    }
+}
+
+impl fmt::Display for StructuredLogMessage {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.json)
+    }
+}
 
 static STRUCTURED_LOG_QUEUE: Channel<
     CriticalSectionRawMutex,
@@ -57,9 +79,38 @@ pub async fn next_structured_log_message() -> StructuredLogMessage {
     STRUCTURED_LOG_QUEUE.receive().await
 }
 
+/// Enqueues the panic recovered from flash as the first structured error of
+/// this boot. The persistence marker lets the forwarder clear flash only after
+/// Victoria Logs acknowledges the record.
+pub fn report_previous_panic(message: &str) {
+    report_previous_panic_arguments(format_args!("previous boot panicked: {message}"));
+}
+
+fn report_previous_panic_arguments(arguments: fmt::Arguments<'_>) {
+    let record = Record::builder()
+        .args(arguments)
+        .level(Level::Error)
+        .target("panic")
+        .build();
+    serial(&record);
+    enqueue_structured_record(&record, true);
+}
+
 fn serial(record: &Record<'_>) {
     #[cfg(target_arch = "xtensa")]
-    esp_println::println!("{}", record.args());
+    if let Some(timestamp) = crate::clock::utc_now() {
+        esp_println::println!("[{}] {}", timestamp, record.args());
+    } else {
+        let elapsed_ms = esp_hal::time::Instant::now()
+            .duration_since_epoch()
+            .as_millis();
+        esp_println::println!(
+            "[+{}.{:03}s] {}",
+            elapsed_ms / 1_000,
+            elapsed_ms % 1_000,
+            record.args()
+        );
+    }
 
     #[cfg(not(target_arch = "xtensa"))]
     let _ = record;
@@ -82,7 +133,14 @@ pub fn serial_only(level: Level, arguments: fmt::Arguments<'_>) {
 #[cold]
 #[inline(never)]
 fn enqueue_structured(record: &Record<'_>) {
-    let structured = format_structured_log_message(record);
+    enqueue_structured_record(record, false);
+}
+
+fn enqueue_structured_record(record: &Record<'_>, persisted_panic: bool) {
+    let structured = StructuredLogMessage {
+        json: format_structured_log_message(record),
+        persisted_panic,
+    };
     if STRUCTURED_LOG_QUEUE.try_send(structured).is_err() {
         STRUCTURED_LOG_DROPPED.fetch_add(1, Ordering::Relaxed);
     }
@@ -135,8 +193,10 @@ fn json_arguments<const N: usize>(output: &mut heapless::String<N>, value: &fmt:
     output.push('"').ok();
 }
 
-fn format_structured_log_message(record: &Record<'_>) -> StructuredLogMessage {
-    let mut output = StructuredLogMessage::new();
+fn format_structured_log_message(
+    record: &Record<'_>,
+) -> heapless::String<STRUCTURED_LOG_MESSAGE_CAPACITY> {
+    let mut output = heapless::String::new();
     output.push('{').ok();
     output.push_str("\"app_name\":").ok();
     json_string(&mut output, STRUCTURED_LOG_APP_NAME);

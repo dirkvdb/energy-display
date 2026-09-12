@@ -43,5 +43,6 @@ esp-hal = { git = "https://github.com/esp-rs/esp-hal.git", tag = "esp-hal-v1.2.0
 esp-println = { version = "=0.18.0", features = ["esp32s3"] }
 esp-radio = { git = "https://github.com/esp-rs/esp-hal.git", tag = "esp-hal-v1.2.0", default-features = false, features = ["esp32s3", "wifi", "esp-alloc"] }
 esp-rtos = { git = "https://github.com/esp-rs/esp-hal.git", tag = "esp-hal-v1.2.0", features = ["esp32s3", "embassy", "esp-radio"] }
+esp-storage = { git = "https://github.com/esp-rs/esp-hal.git", tag = "esp-hal-v1.2.0", features = ["esp32s3"] }
 st7305 = { version = "=0.1.2", features = ["async", "graphics"] }
 static_cell = "=2.1.1"

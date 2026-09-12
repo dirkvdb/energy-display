@@ -48,7 +48,13 @@ static MQTT_BUFFERS: StaticCell<mqtt::Buffers> = StaticCell::new();
 #[esp_hal::main]
 async fn main(spawner: Spawner) -> ! {
     let peripherals = esp_hal::init(esp_hal::Config::default());
+    let previous_panic = panic_store::initialize(peripherals.FLASH);
     logging::initialize();
+    match previous_panic {
+        Ok(Some(message)) => logging::report_previous_panic(&message),
+        Ok(None) => {}
+        Err(error) => log::error!("panic storage initialization failed: {:?}", error),
+    }
     info!("energydisplay firmware starting");
     esp_alloc::heap_allocator!(#[ram(reclaimed)] size: board::RADIO_HEAP_SIZE);
     esp_alloc::heap_allocator!(size: board::FONT_HEAP_SIZE);

@@ -12,7 +12,7 @@ use reqwless::{
     request::{Method, RequestBuilder},
 };
 
-use crate::{config, logging};
+use crate::{config, logging, panic_store};
 
 const VICTORIA_LOGS_PORT: u16 = 9428;
 const VICTORIA_PATH: &str = "/insert/jsonline?_stream_fields=app_name,hostname,proc_id";
@@ -66,7 +66,7 @@ impl Buffers {
             victoria_url: heapless::String::new(),
             header: [0; HTTP_HEADER_CAPACITY],
             body: heapless::String::new(),
-            message: heapless::String::new(),
+            message: logging::StructuredLogMessage::empty(),
         }
     }
 }
@@ -99,49 +99,64 @@ async fn run(stack: Stack<'static>) -> ! {
             .expect("Victoria Logs URL exceeds capacity");
         }
         buffers.message = message;
-        stack.wait_config_up().await;
 
-        buffers.body.clear();
-        write!(buffers.body, "{}\n", buffers.message).expect("Victoria Logs body exceeds capacity");
+        loop {
+            stack.wait_config_up().await;
+            buffers.body.clear();
+            write!(buffers.body, "{}\n", buffers.message)
+                .expect("Victoria Logs body exceeds capacity");
 
-        let result: Result<(), ()> = async {
-            let mut tcp_client = TcpClient::new(stack, &mut buffers.tcp_state);
-            tcp_client.set_timeout(Some(SOCKET_TIMEOUT));
-            let mut client = HttpClient::new(&tcp_client, &dns);
-            let request = with_timeout(
-                CONNECT_TIMEOUT,
-                client.request(Method::POST, &buffers.victoria_url),
-            )
-            .await
-            .map_err(|_| ())?
-            .map_err(|_| ())?;
-            let mut request = request
-                .headers(&VICTORIA_HEADERS)
-                .body(buffers.body.as_bytes());
-            let response = request.send(&mut buffers.header).await.map_err(|_| ())?;
-            (response.status.0 < 300).then_some(()).ok_or(())
-        }
-        .await;
-
-        match result {
-            Ok(()) => {
-                if failed {
-                    logging::serial_only(
-                        log::Level::Info,
-                        format_args!("HTTP log forwarding restored"),
-                    );
-                    failed = false;
-                }
+            let result: Result<(), ()> = async {
+                let mut tcp_client = TcpClient::new(stack, &mut buffers.tcp_state);
+                tcp_client.set_timeout(Some(SOCKET_TIMEOUT));
+                let mut client = HttpClient::new(&tcp_client, &dns);
+                let request = with_timeout(
+                    CONNECT_TIMEOUT,
+                    client.request(Method::POST, &buffers.victoria_url),
+                )
+                .await
+                .map_err(|_| ())?
+                .map_err(|_| ())?;
+                let mut request = request
+                    .headers(&VICTORIA_HEADERS)
+                    .body(buffers.body.as_bytes());
+                let response = request.send(&mut buffers.header).await.map_err(|_| ())?;
+                (response.status.0 < 300).then_some(()).ok_or(())
             }
-            Err(()) => {
-                if !failed {
-                    logging::serial_only(
-                        log::Level::Error,
-                        format_args!("HTTP log forwarding failed"),
-                    );
-                    failed = true;
+            .await;
+
+            match result {
+                Ok(()) => {
+                    if failed {
+                        logging::serial_only(
+                            log::Level::Info,
+                            format_args!("HTTP log forwarding restored"),
+                        );
+                        failed = false;
+                    }
+                    if buffers.message.is_persisted_panic()
+                        && let Err(error) = panic_store::clear()
+                    {
+                        logging::serial_only(
+                            log::Level::Error,
+                            format_args!("failed to clear persisted panic: {:?}", error),
+                        );
+                    }
+                    break;
                 }
-                Timer::after_secs(1).await;
+                Err(()) => {
+                    if !failed {
+                        logging::serial_only(
+                            log::Level::Error,
+                            format_args!("HTTP log forwarding failed"),
+                        );
+                        failed = true;
+                    }
+                    Timer::after_secs(1).await;
+                    if !buffers.message.is_persisted_panic() {
+                        break;
+                    }
+                }
             }
         }
     }
