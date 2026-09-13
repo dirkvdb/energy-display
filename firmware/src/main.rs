@@ -6,16 +6,13 @@ use core::mem::MaybeUninit;
 use dashboard_core::{Dashboard, DashboardRenderer};
 use display_interface_spi::SPIInterface;
 use embassy_executor::Spawner;
-use embassy_futures::{
-    join::{join, join5},
-    select::{Either, select},
-};
+use embassy_futures::join::{join, join5};
 use embassy_net::StackResources;
-use embassy_time::{Duration, Ticker};
 use embedded_hal_bus::spi::ExclusiveDevice;
 use energydisplay_firmware::{
-    board, clock, config, display, logging, panic_store,
-    tasks::{buttons, mqtt, net, structured_log},
+    MAX_POST_BOOT_RUST_ALLOCATION_SIZE, board, clock, config, display, logging, panic_store,
+    seal_allocator,
+    tasks::{buttons, mqtt, net, ota, structured_log},
 };
 use esp_backtrace as _;
 #[cfg(feature = "debug")]
@@ -41,11 +38,14 @@ use static_cell::StaticCell;
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
-// MQTT, SNTP, and structured-log HTTP can all run alongside DHCP. Keep the
+// MQTT, SNTP, structured-log HTTP, and OTA can all run alongside DHCP. Keep the
 // socket set in stable static storage outside the protected main-stack region.
 #[ram(reclaimed)]
-static mut NETWORK_RESOURCES: MaybeUninit<StackResources<4>> = MaybeUninit::uninit();
+static mut NETWORK_RESOURCES: MaybeUninit<StackResources<5>> = MaybeUninit::uninit();
 static MQTT_BUFFERS: StaticCell<mqtt::Buffers> = StaticCell::new();
+static STRUCTURED_LOG_BUFFERS: StaticCell<structured_log::Buffers> = StaticCell::new();
+#[ram(reclaimed)]
+static mut OTA_BUFFERS: MaybeUninit<ota::Buffers> = MaybeUninit::uninit();
 
 #[esp_hal::main]
 async fn main(spawner: Spawner) -> ! {
@@ -58,8 +58,12 @@ async fn main(spawner: Spawner) -> ! {
         Err(error) => log::error!("panic storage initialization failed: {:?}", error),
     }
     info!("energydisplay firmware starting");
+    #[cfg(feature = "debug")]
+    info!("DEBUG ENABLED!");
+
+    // The closed-source Wi-Fi driver requires a heap for packet copies and internal state.
+    // Application code and rendering use fixed-capacity storage exclusively.
     esp_alloc::heap_allocator!(#[ram(reclaimed)] size: board::RADIO_HEAP_SIZE);
-    esp_alloc::heap_allocator!(size: board::FONT_HEAP_SIZE);
 
     let timer_group = TimerGroup::new(peripherals.TIMG0);
     esp_rtos::start(timer_group.timer0, peripherals.FROM_CPU_INTR0);
@@ -67,7 +71,6 @@ async fn main(spawner: Spawner) -> ! {
     let button_config = InputConfig::default().with_pull(Pull::Up);
     let boot_button = Input::new(peripherals.GPIO0, button_config);
     let key_button = Input::new(peripherals.GPIO18, button_config);
-    spawner.spawn(buttons::task(boot_button, key_button).unwrap());
 
     info!(
         "ST7305 native={}x{}, logical={}x{} landscape",
@@ -162,7 +165,18 @@ async fn main(spawner: Spawner) -> ! {
     let wifi_interface = Interface::station();
     let controller = WifiController::new(
         peripherals.WIFI,
-        ControllerConfig::default().with_initial_config(station_config),
+        ControllerConfig::default()
+            // The ESP32-S3 vendor driver always uses dynamic RX/TX packet copies.
+            // Keep those unavoidable allocations strictly bounded and disable AMPDU's
+            // additional reorder state; application traffic does not need aggregation.
+            .with_static_rx_buf_num(4)
+            .with_dynamic_rx_buf_num(8)
+            .with_static_tx_buf_num(0)
+            .with_dynamic_tx_buf_num(8)
+            .with_ampdu_rx_enable(false)
+            .with_ampdu_tx_enable(false)
+            .with_rx_ba_win(0)
+            .with_initial_config(station_config),
     )
     .expect("failed to initialize Wi-Fi controller");
 
@@ -173,6 +187,15 @@ async fn main(spawner: Spawner) -> ! {
     let network_resources = unsafe {
         let storage = core::ptr::addr_of_mut!(NETWORK_RESOURCES);
         (*storage).write(StackResources::new())
+    };
+    let mqtt_buffers = MQTT_BUFFERS.init(mqtt::Buffers::new());
+    let structured_log_buffers = STRUCTURED_LOG_BUFFERS.init(structured_log::Buffers::new());
+    structured_log_buffers.initialize();
+    // SAFETY: `main` initializes this uninitialized static exactly once and
+    // the OTA task owns the returned reference for the rest of the program.
+    let ota_buffers = unsafe {
+        let storage = core::ptr::addr_of_mut!(OTA_BUFFERS);
+        (*storage).write(ota::Buffers::new())
     };
     let (stack, runner) = embassy_net::new(
         wifi_interface,
@@ -186,31 +209,24 @@ async fn main(spawner: Spawner) -> ! {
         heap_stats.current_usage, heap_stats.size
     );
 
-    spawner.spawn(structured_log::task(stack).unwrap());
+    ota::confirm_running_image();
+    seal_allocator();
+    info!(
+        "memory: boot complete; Rust allocations limited to {} bytes each",
+        MAX_POST_BOOT_RUST_ALLOCATION_SIZE
+    );
+
+    spawner.spawn(buttons::task(boot_button, key_button).unwrap());
+    spawner.spawn(structured_log::task(stack, structured_log_buffers).unwrap());
+    spawner.spawn(ota::task(stack, ota_buffers).unwrap());
 
     // Borrow the large panel/dashboard state instead of moving it into a second
     // future, which creates large temporaries in the main task's poll frame.
     let display_task = async {
-        const DISPLAY_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
-
-        let mut refresh_tick = Ticker::every(DISPLAY_REFRESH_INTERVAL);
-        let mut displayed_time = None;
-        let mut dirty = false;
         loop {
-            let event = select(mqtt::UPDATES.receive(), refresh_tick.next()).await;
+            let update = mqtt::UPDATES.receive().await;
             let now = clock::now();
-            match event {
-                Either::First(update) => {
-                    dashboard.apply(update, now);
-                    dirty = true;
-                    while let Ok(update) = mqtt::UPDATES.try_receive() {
-                        dashboard.apply(update, now);
-                    }
-                    continue;
-                }
-                Either::Second(_) if !dirty && now == displayed_time => continue,
-                Either::Second(_) => {}
-            }
+            dashboard.apply(update, now);
             while let Ok(update) = mqtt::UPDATES.try_receive() {
                 dashboard.apply(update, now);
             }
@@ -233,8 +249,6 @@ async fn main(spawner: Spawner) -> ! {
                 flush_time.as_millis(),
                 frame_started.elapsed().as_millis()
             );
-            displayed_time = now;
-            dirty = false;
         }
     };
 
@@ -242,7 +256,7 @@ async fn main(spawner: Spawner) -> ! {
         net::runner_task(runner),
         net::connection_task(controller),
         join(net::status_task(stack), clock::run(stack)),
-        mqtt::run(stack, MQTT_BUFFERS.init(mqtt::Buffers::new())),
+        mqtt::run(stack, mqtt_buffers),
         display_task,
     )
     .await;

@@ -2,7 +2,7 @@
 ESP_HAL_CONFIG_ENSURE_MAIN_STACK_MINIMUM = "57344"
 
 [target.xtensa-esp32s3-none-elf]
-runner = "espflash flash --partition-table firmware/partitions.csv --monitor"
+runner = "espflash flash --partition-table firmware/partitions.csv --target-app-partition factory --erase-parts otadata --monitor"
 linker = "xtensa-esp32s3-elf-gcc"
 rustflags = [
   "-C",

@@ -77,6 +77,7 @@ mod hardware {
     use esp_storage::{Flash, FlashStorage, FlashStorageError};
 
     use super::record::{AlignedRecord, PanicMessage, decode, encode};
+    use crate::{MAX_POST_BOOT_RUST_ALLOCATION_SIZE, rejected_allocation_size};
 
     const PARTITION_LABEL: &str = "panic";
 
@@ -94,6 +95,13 @@ mod hardware {
         Unavailable,
         Busy,
         Flash(FlashStorageError),
+    }
+
+    #[derive(Debug)]
+    pub(crate) enum FlashAccessError<E> {
+        Unavailable,
+        Busy,
+        Operation(E),
     }
 
     struct PanicFlash {
@@ -178,7 +186,14 @@ mod hardware {
 
     fn persist(info: &PanicInfo<'_>) -> Result<(), StorageError> {
         let mut message = PanicMessage::new();
-        let _ = write!(message, "{info}");
+        if let Some(size) = rejected_allocation_size() {
+            let _ = write!(
+                message,
+                "post-boot Rust allocation of {size} bytes exceeded the {MAX_POST_BOOT_RUST_ALLOCATION_SIZE}-byte limit: {info}"
+            );
+        } else {
+            let _ = write!(message, "{info}");
+        }
         let record = encode(&message);
         with_flash(|flash| {
             flash
@@ -206,6 +221,21 @@ mod hardware {
         operation(flash).map_err(StorageError::Flash)
     }
 
+    pub(crate) fn with_storage<R, E>(
+        operation: impl FnOnce(&mut FlashStorage<'static>) -> Result<R, E>,
+    ) -> Result<R, FlashAccessError<E>> {
+        let _guard = acquire_flash().map_err(|error| match error {
+            StorageError::Busy => FlashAccessError::Busy,
+            StorageError::Unavailable | StorageError::Flash(_) => FlashAccessError::Unavailable,
+        })?;
+        // SAFETY: `FLASH_BUSY` grants exclusive mutable access to the cell.
+        let storage = unsafe { &mut *PANIC_FLASH.0.get() }
+            .as_mut()
+            .map(|flash| &mut flash.storage)
+            .ok_or(FlashAccessError::Unavailable)?;
+        operation(storage).map_err(FlashAccessError::Operation)
+    }
+
     #[panic_handler]
     fn panic_handler(info: &PanicInfo<'_>) -> ! {
         if PANICKING.swap(true, Ordering::Relaxed) {
@@ -215,6 +245,13 @@ mod hardware {
 
         esp_println::println!("");
         esp_println::println!("====================== PANIC ======================");
+        if let Some(size) = rejected_allocation_size() {
+            esp_println::println!(
+                "post-boot Rust allocation of {} bytes exceeded the {}-byte limit",
+                size,
+                MAX_POST_BOOT_RUST_ALLOCATION_SIZE
+            );
+        }
         esp_println::println!("{info}");
         if let Err(error) = persist(info) {
             esp_println::println!("failed to persist panic: {:?}", error);
@@ -230,6 +267,8 @@ mod hardware {
     }
 }
 
+#[cfg(target_arch = "xtensa")]
+pub(crate) use hardware::{FlashAccessError, with_storage};
 #[cfg(target_arch = "xtensa")]
 pub use hardware::{InitializeError, StorageError, clear, initialize};
 #[cfg(target_arch = "xtensa")]

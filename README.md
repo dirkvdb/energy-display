@@ -1,6 +1,6 @@
 # Energy Display
 
-Bare-metal Rust port of `../inky-solar` for the Waveshare ESP32-S3-RLCD-4.2. Board support is validated, and the firmware renders the source application's Advanced dashboard from a shared `no_std` model and renderer. It now connects to Wi-Fi with Embassy, receives live MQTT v5 telemetry through a bounded `rust-mqtt` client, and redraws the display for each accepted update.
+Bare-metal Rust port of `../inky-solar` for the Waveshare ESP32-S3-RLCD-4.2. Board support is validated, and the firmware renders the source application's Advanced dashboard from a shared `no_std` model and renderer. It connects to Wi-Fi with Embassy, receives live MQTT v5 telemetry through a bounded `rust-mqtt` client, supports authenticated over-the-air firmware updates, and redraws the display for each accepted update.
 
 See [`PORTING_PLAN.md`](PORTING_PLAN.md) for the remaining RTC, retained-summary, and reliability work.
 
@@ -20,6 +20,8 @@ See [`PORTING_PLAN.md`](PORTING_PLAN.md) for the remaining RTC, retained-summary
 The host simulator tests against the same deterministic dashboard fixture used by `inkytool test` in `../inky-solar`. Its live mode starts with an empty dashboard, preserves the most recently received state across network outages, and redraws immediately after each valid MQTT update, just like the firmware. On hardware, SNTP synchronizes UTC with `192.168.1.1` and a monotonic-backed software clock presents `Europe/Brussels` local time with CET/CEST transitions. Until the first successful synchronization, the status bar shows `Waiting for time` and hourly aggregation remains uninitialized.
 
 The serial console unconditionally logs display startup, heap usage, Wi-Fi connection and reconnect state, the DHCP address, NTP synchronization, MQTT connection/subscription state, and payload rejection details. Warning and error `log` records are also sent asynchronously as structured JSON Lines to Victoria Logs at `192.168.1.13:9428`. If that server is unavailable, serial logging continues and the one-record forwarding queue drops excess records rather than blocking firmware tasks. Panics are checksummed into the dedicated `panic` flash partition before a software reset. On the next boot, the recovered message is queued as a structured error and retained in flash until Victoria Logs accepts it.
+
+Application code performs no heap allocation after boot: renderer glyphs are generated at build time and embedded as static 1-bit bitmaps, while MQTT, HTTP logging, OTA, SNTP, Embassy sockets, channels, strings, and the display framebuffer use fixed-capacity or static storage. The former 165 KiB runtime font heap and the logger's lazy boxed future/buffer have been removed. A guarded Rust global allocator is restricted before long-lived tasks start: small allocations up to 1 KiB remain available for `esp-rtos` timer and synchronization bookkeeping, while larger allocations are rejected and identified in serial and persisted panic messages. The only backing heap is a 64 KiB reclaimed-RAM region also required by Espressif's closed-source Wi-Fi driver. That driver cannot operate allocation-free: its C ABI bypasses the Rust per-allocation limit and always creates dynamic RX packet copies, while this ESP32-S3 binary is compiled for dynamic TX copies. Firmware bounds those vendor allocations to eight RX and eight TX packets, uses four static hardware RX buffers, and disables AMPDU reorder state. Connect/disconnect logs report driver-heap usage so reconnect tests can detect retained state.
 
 ## Development environment
 
@@ -60,6 +62,7 @@ Or run the checked-in tasks directly:
 | `just validate` | Check formatting and type-check the target |
 | `just build` | Produce the optimized release ELF |
 | `just flash` | Build, flash, and open the interactive serial monitor |
+| `just ota-push <address>` | Build and push firmware to a running device over Wi-Fi |
 | `just monitor` | Open the interactive serial monitor without flashing |
 | `just firmware-lock` | Refresh `Cargo.lock` after dependency changes |
 | `just sim` | Configure TAP/NAT with `sudo` and run the live simulator |
@@ -101,6 +104,14 @@ just monitor
 
 `just flash` builds the release image and flashes it. The separate monitor command is intentionally interactive and runs until stopped.
 
+The first OTA-capable installation must be made over USB with `just flash`; this installs the new factory/OTA partition table. Subsequent releases can be pushed over Wi-Fi:
+
+```sh
+just ota-push 192.168.1.42
+```
+
+The device listens on TCP port 3232. The upload metadata is authenticated with HMAC-SHA256 using the existing `MQTT_PASSWORD`, and the complete image is SHA-256 checked before the inactive OTA slot is activated. Keep the password stable across releases so a running device can authenticate the next image. The OTA transport is not encrypted, although the firmware image itself contains the same build-time credentials and should already be treated as sensitive. A successful upload reboots automatically; an interrupted or invalid upload leaves the currently running slot selected.
+
 Acceptance checks:
 
 1. The serial log reaches `display: empty dashboard rendered` without a panic.
@@ -108,9 +119,10 @@ Acceptance checks:
 3. MQTT reports a TCP connection and eight successful subscription acknowledgements, followed by `mqtt: subscribed to 8 live filters ...`.
 4. Published telemetry produces `display: dashboard updated` and appears in the corresponding dashboard fields.
 5. Disconnecting the access point produces Wi-Fi/network/MQTT failure logs while the last dashboard frame remains visible; restoring it reconnects and resubscribes.
-6. The complete outer border is visible and stable, and `heartbeat: dashboard displayed` continues every five seconds.
+6. Repeating Wi-Fi disconnect/reconnect cycles returns `wifi: driver heap after disconnect` to a stable baseline and never reports an allocation failure.
+7. The complete outer border is visible and stable, and `heartbeat: dashboard displayed` continues every five seconds.
 
-Text uses the OFL-licensed Bitter Black font, shaped and rasterized at runtime by `cosmic-text` 0.19 with its `no_std` and `swash` features. The checked-in upstream Bitter variable TTF is pinned to version 3.021; during environment construction, `devenv.nix` instantiates its Black weight and subsets it to printable ASCII plus `°`, `↑`, and `↓` before embedding it in flash. TrueType `glyf` outlines are required because the ESP32-S3 target crashes in Zeno while rasterizing the previous Bitter Pro CFF outlines. The renderer preserves the source font sizes, advanced shaping, `alpha > 127` monochrome threshold, alignment, and ink-bound vertical centering. Font hinting is disabled for both text and icons on host and device because Skrifa's hinting initialization overflows the ESP32-S3 stack; unhinted glyphs may have slightly different pixel edges. Ink-bound vertical centering uses two cache-backed raster passes and writes the second pass into the framebuffer in small fixed-size batches, avoiding heap allocation after Wi-Fi has fragmented the heap. The source Font Awesome asset is a Pro font without a checked-in redistribution license, so it is not copied. Instead, `devenv.nix` takes the Apache-2.0 `material-design-icons` font from Nixpkgs and subsets it to the five required glyphs. The grid, solar, heating, shower, and center backup-heater icons use `lightning-bolt`, `solar-power-variant-outline`, `heating-coil`, `shower-head`, and `recycle-variant`, respectively. The small derived font is embedded in the firmware; the remaining monochrome symbols continue to use the existing local geometry.
+Text uses the OFL-licensed Bitter Black font. During compilation, `dashboard-core/build.rs` uses `cosmic-text` 0.19 and Swash on the host to shape and rasterize the exact supported character/icon repertoire at every dashboard size. It emits static 1-bit glyph bitmaps, four horizontal subpixel variants, advances, kerning overrides, and baseline metrics into `OUT_DIR`; `cosmic-text` and the source fonts are not runtime firmware dependencies. The runtime renderer uses only fixed-capacity `heapless` layout vectors and static flash data while preserving advanced shaping results, `alpha > 127` monochrome thresholding, wrapping, alignment, and ink-bound vertical centering. The generated bitmap payload is about 44 KiB. The source Font Awesome asset is a Pro font without a checked-in redistribution license, so it is not copied. Instead, `devenv.nix` takes the Apache-2.0 `material-design-icons` font from Nixpkgs and subsets it to the five required glyphs. The grid, solar, heating, shower, and center backup-heater icons use `lightning-bolt`, `solar-power-variant-outline`, `heating-coil`, `shower-head`, and `recycle-variant`, respectively. The remaining monochrome symbols continue to use existing local geometry.
 
 If the panel remains blank or is unstable, keep SPI at 10 MHz and compare the initialization sequence with `.board-reference` before changing frequencies. The pinned `st7305` crate intentionally gets tested unchanged first; the vendor example includes an additional gate-timing command (`0x62`) that may require an upstream driver fix if hardware proves it necessary.
 
@@ -123,7 +135,7 @@ If the panel remains blank or is unstable, keep SPI at 10 MHz and compare the in
 ├── crates/
 │   └── dashboard-core/      # no_std model, MQTT decoding, formatting, renderer
 ├── firmware/
-│   ├── partitions.csv        # App and persistent panic flash partitions
+│   ├── partitions.csv        # Factory, A/B OTA, and persistent panic partitions
 │   └── src/
 │       ├── board.rs         # Board dimensions, pins, and memory settings
 │       ├── config.rs        # Embedded credentials and MQTT defaults
@@ -133,6 +145,7 @@ If the panel remains blank or is unstable, keep SPI at 10 MHz and compare the in
 │       ├── tasks/
 │       │   ├── mqtt.rs      # Bounded MQTT v5 client and typed update channel
 │       │   ├── net.rs       # Wi-Fi reconnect, DHCP status, and network runner
+│       │   ├── ota.rs       # Authenticated OTA receiver and A/B slot activation
 │       │   └── structured_log.rs # Victoria Logs HTTP forwarder
 │       ├── lib.rs           # Shared board/display adapter
 │       └── main.rs          # Runtime, hardware initialization, and display owner

@@ -25,9 +25,9 @@ Implementation starts with hardware proof, before source fixtures, networking, o
 
 The workspace includes `crates/dashboard-core`, a `no_std` implementation of the active model, exact live MQTT topic/payload decoding, corrected explicit-time hourly aggregation, allocation-free formatting, and the complete Advanced dashboard geometry/graph. Simulator tests render the source `inkytool test` fixture. Live simulator and firmware both start with an empty model and feed the same renderer from live MQTT updates.
 
-Bitter Black rendering is complete: the shared renderer uses `cosmic-text` 0.19 in `no_std + alloc` mode with the source font sizes, advanced shaping, monochrome threshold, alignment, and ink-bound vertical centering. Nix instantiates weight 900 from the pinned upstream variable TrueType font and derives a metadata-preserving subset containing printable ASCII plus `°`, `↑`, and `↓` before embedding it. The TrueType replacement avoids a target-only Zeno failure when rasterizing the original Bitter Pro CFF outlines. The source's Font Awesome Pro asset was not copied because its redistribution terms are not documented in the source checkout. The grid, solar, heating, shower, and center backup-heater symbols use the Apache-2.0 Material Design Icons `lightning-bolt`, `solar-power-variant-outline`, `heating-coil`, `shower-head`, and `recycle-variant` glyphs, subset from the Nixpkgs font during environment construction; other monochrome symbols retain their local geometry.
+Bitter Black rendering is complete without runtime allocation: `dashboard-core/build.rs` uses `cosmic-text` 0.19 and Swash on the host to generate static 1-bit bitmap glyphs, subpixel variants, metrics, and sparse kerning data for every dashboard size. The shared runtime renderer uses fixed-capacity layout vectors while preserving the source's shaping results, monochrome threshold, wrapping, alignment, and ink-bound vertical centering. Nix instantiates weight 900 from the pinned upstream variable TrueType font and derives a metadata-preserving subset containing printable ASCII plus `°`, `↑`, and `↓` as generator input. The source's Font Awesome Pro asset was not copied because its redistribution terms are not documented in the source checkout. The grid, solar, heating, shower, and center backup-heater symbols use the Apache-2.0 Material Design Icons `lightning-bolt`, `solar-power-variant-outline`, `heating-coil`, `shower-head`, and `recycle-variant` glyphs, subset from the Nixpkgs font during environment construction; other monochrome symbols retain their local geometry.
 
-Wi-Fi and live MQTT integration are implemented in software using the `esp-hal-v1.2.0` release-tagged `esp-radio`, Embassy DHCP/TCP, and `rust-mqtt` 0.5.1. Credentials come from a required Secretspec keyring profile and are embedded at build time. Network and MQTT tasks reconnect independently, all large protocol buffers are statically bounded, and accepted publications cross an eight-entry typed `Update` channel to the sole display/model owner. The live host simulator replaces only the ESP Wi-Fi driver with `embassy-net-tuntap`; it retains Embassy's executor, network stack and timing, the shared MQTT session, typed channel, model, and renderer. Hardware acceptance through live MQTT updates is complete. SNTP-backed local wall time is implemented in software; RTC persistence, retained summary restore/publication, NTP hardware acceptance, and long-running memory validation remain outstanding.
+Wi-Fi and live MQTT integration are implemented in software using the `esp-hal-v1.2.0` release-tagged `esp-radio`, Embassy DHCP/TCP, and `rust-mqtt` 0.5.1. Credentials come from a required Secretspec keyring profile and are embedded at build time. Network and MQTT tasks reconnect independently, all application protocol buffers are statically bounded, and accepted publications cross an eight-entry typed `Update` channel to the sole display/model owner. The Rust global allocator is restricted before long-lived tasks start: radio/RTOS bookkeeping allocations up to 1 KiB remain permitted, while larger application allocations fail immediately with a specific persisted diagnostic. Espressif's closed-source Wi-Fi driver unavoidably allocates dynamic RX/TX packet copies through its C ABI at runtime, so its sole 64 KiB reclaimed-RAM heap remains available to that documented exception and is configured with finite packet limits and AMPDU disabled. The live host simulator replaces only the ESP Wi-Fi driver with `embassy-net-tuntap`; it retains Embassy's executor, network stack and timing, the shared MQTT session, typed channel, model, and renderer. Hardware acceptance through live MQTT updates is complete. SNTP-backed local wall time is implemented in software; RTC persistence, retained summary restore/publication, NTP hardware acceptance, and long-running memory validation remain outstanding.
 
 ### Deliverables
 
@@ -131,7 +131,7 @@ Use `display-interface-spi` if it composes cleanly with the selected `esp-hal` S
 1. Raspberry Pi/Linux startup with ESP32-S3 initialization.
 2. Tokio tasks and signals with Embassy tasks, channels, signals, and timers.
 3. `rumqttc` with a bounded `no_std` MQTT client over `embassy-net`.
-4. The host `cosmic-text` configuration with its `no_std + alloc + swash` configuration while preserving runtime OTF shaping and monochrome rasterization.
+4. Runtime `cosmic-text` shaping/rasterization with build-time generation of static 1-bit glyph data while preserving its layout and monochrome output.
 5. `chrono::Local` with RTC/SNTP-backed wall time and explicit local-time conversion.
 6. E-paper output and refresh policy with direct ST7305 GRAM writes.
 7. CLI/environment configuration with embedded configuration/provisioning.
@@ -277,12 +277,12 @@ The source uses proportional Bitter Pro Black text and Font Awesome Pro icons th
 
 **Implemented:**
 
-1. Instantiate weight 900 from the pinned OFL-licensed Bitter variable TTF, subset it to printable ASCII plus `°`, `↑`, and `↓`, preserve its family/weight metadata, and embed the derived TrueType font in flash. This replaces the source's Bitter Pro CFF outlines, which trigger a target-only Zeno rasterizer failure.
-2. Reuse `cosmic-text` 0.19 with `default-features = false` and features `no_std` and `swash`, rather than maintaining a custom font generator or bitmap renderer.
-3. Preserve the source's advanced shaping and sizes: 43 px main values, 32 px split values, 29 px battery values, 23 px subtext, and 18 px status text.
-4. Preserve the source's `alpha > 127` monochrome threshold, horizontal alignment, and vertical centering based on actual rendered ink bounds. Measure ink in a first cache-backed raster pass and write the second pass directly to the framebuffer so redraws do not require a large contiguous temporary pixel allocation.
-5. Back runtime shaping and raster caching with a 172 KiB regular internal-RAM heap plus the 64 KiB reclaimed region, leaving at least 56 KiB for the CPU0 stack. Do not use ESP32-S3 PSRAM as the global allocator because `cosmic-text` uses `Arc` and its atomic reference counts must reside in internal RAM.
-6. Keep the Font Awesome Pro asset out of this repository because the source checkout does not document redistribution permission. Use Nixpkgs' Apache-2.0 `material-design-icons` package for grid `lightning-bolt` (`U+F140B`), solar `solar-power-variant-outline` (`U+F1A74`), heating `heating-coil` (`U+F1AAF`), shower `shower-head` (`U+F09A0`), and center backup-heater `recycle-variant` (`U+F139D`), deriving a five-glyph subset with `pyftsubset` before embedding it. Keep the remaining simple monochrome symbols as local geometry.
+1. Instantiate weight 900 from the pinned OFL-licensed Bitter variable TTF and subset it to the dashboard's exact text repertoire plus `°`, `↑`, and `↓`. This replaces the source's Bitter Pro CFF outlines, which trigger a target-only Zeno rasterizer failure.
+2. Use `cosmic-text` 0.19 and Swash only in the host build script to shape/rasterize every supported glyph, size, and horizontal subpixel bin into generated static Rust data.
+3. Preserve the source's advanced shaping results and sizes: 43 px main values, 32 px split values, 29 px battery values, 23 px subtext, and 18 px status text.
+4. Preserve the source's `alpha > 127` monochrome threshold, wrapping, horizontal alignment, and vertical centering based on actual rendered ink bounds. Runtime rendering reads the generated 1-bit masks directly from flash and uses only fixed-capacity layout vectors.
+5. Keep `cosmic-text`, Swash caches, source font bytes, `Arc`, and allocator-backed shaping buffers out of the runtime dependency graph. The generated bitmap payload is approximately 44 KiB and requires no runtime font heap.
+6. Keep the Font Awesome Pro asset out of this repository because the source checkout does not document redistribution permission. Use Nixpkgs' Apache-2.0 `material-design-icons` package for grid `lightning-bolt` (`U+F140B`), solar `solar-power-variant-outline` (`U+F1A74`), heating `heating-coil` (`U+F1AAF`), shower `shower-head` (`U+F09A0`), and center backup-heater `recycle-variant` (`U+F139D`), deriving a five-glyph subset with `pyftsubset` as generator input. Keep the remaining simple monochrome symbols as local geometry.
 
 **Exit criterion:** Bitter text metrics and rasterization match the thresholded source rendering; licensed font glyphs replace the grid, solar, heating, shower, and backup-heater approximations.
 
@@ -438,10 +438,11 @@ Initial application RAM budget should explicitly account for:
 - typed update and publish channels;
 - task stacks;
 - approximately 1.2 KB of source-compatible hourly `f64` arrays;
-- small text-formatting buffers;
-- the 172 KiB regular internal-RAM heap plus 64 KiB reclaimed region used by `cosmic-text`, radio, and network allocations, while retaining a minimum 56 KiB CPU0 stack;
+- small fixed-capacity text-formatting and font-layout buffers;
+- static Embassy task futures, including the HTTP structured-log client;
+- a 64 KiB reclaimed-RAM heap used only by the Espressif Wi-Fi binary's unavoidable packet copies and opaque connection state.
 
-The subsetted Bitter TrueType font belongs in flash. Keep the `cosmic-text` allocator in internal RAM rather than PSRAM because its `Arc` reference counts use atomics.
+The generated Bitter/Material Design bitmap payload belongs in flash. Application code must not use `alloc`; after boot, the Rust global allocator permits only allocations up to 1 KiB for radio/RTOS bookkeeping and rejects larger requests. Runtime Wi-Fi C allocations remain a documented vendor-driver exception because `esp-radio` exposes no static-only RX path and this ESP32-S3 driver is compiled for dynamic TX buffers.
 
 **Exit criterion:** target build size is recorded, static buffers fit internal memory, and a multi-hour reconnect/update test remains stable.
 

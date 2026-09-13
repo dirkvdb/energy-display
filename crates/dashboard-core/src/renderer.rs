@@ -621,3 +621,76 @@ where
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use core::convert::Infallible;
+
+    use super::*;
+    use crate::model::test_dashboard;
+
+    const FRAMEBUFFER_BYTES: usize = (WIDTH * HEIGHT / 8) as usize;
+    const FIXTURE_TIME: LocalDateTime = LocalDateTime::new(2026, 9, 9, 3, 12, 34);
+
+    struct Framebuffer([u8; FRAMEBUFFER_BYTES]);
+
+    impl Framebuffer {
+        fn new() -> Self {
+            Self([0xff; FRAMEBUFFER_BYTES])
+        }
+
+        fn hash(&self) -> u64 {
+            self.0.iter().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+                (hash ^ u64::from(*byte)).wrapping_mul(0x0100_0000_01b3)
+            })
+        }
+    }
+
+    impl OriginDimensions for Framebuffer {
+        fn size(&self) -> Size {
+            Size::new(WIDTH, HEIGHT)
+        }
+    }
+
+    impl DrawTarget for Framebuffer {
+        type Color = BinaryColor;
+        type Error = Infallible;
+
+        fn draw_iter<I>(&mut self, pixels: I) -> Result<(), Self::Error>
+        where
+            I: IntoIterator<Item = Pixel<Self::Color>>,
+        {
+            for Pixel(point, color) in pixels {
+                if !(0..WIDTH as i32).contains(&point.x) || !(0..HEIGHT as i32).contains(&point.y) {
+                    continue;
+                }
+                let offset = point.y as usize * WIDTH as usize + point.x as usize;
+                let mask = 1 << (offset & 7);
+                if color.is_on() {
+                    self.0[offset / 8] |= mask;
+                } else {
+                    self.0[offset / 8] &= !mask;
+                }
+            }
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn complete_frames_match_cosmic_text_reference() {
+        let fixture = test_dashboard().status;
+        for (status, now, split, expected) in [
+            (&fixture, Some(FIXTURE_TIME), true, 0x8ebd_80b2_9a1e_e8eb),
+            (&fixture, Some(FIXTURE_TIME), false, 0x3e5d_8273_53ce_2ac1),
+            (&EnergyStatus::default(), None, true, 0xb3c2_9d9f_6adb_da96),
+        ] {
+            let mut display = Framebuffer::new();
+            display.clear(WHITE).unwrap();
+            DashboardRenderer::new()
+                .with_split_solar_production(split)
+                .render(&mut display, status, now)
+                .unwrap();
+            assert_eq!(display.hash(), expected);
+        }
+    }
+}

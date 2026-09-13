@@ -1,4 +1,3 @@
-use alloc::boxed::Box;
 use core::{fmt::Write as _, net::IpAddr};
 
 use embassy_net::{
@@ -51,7 +50,7 @@ impl Dns for FixedIpDns {
     }
 }
 
-struct Buffers {
+pub struct Buffers {
     tcp_state: TcpClientState<1, TCP_TX_SIZE, TCP_RX_SIZE>,
     victoria_url: heapless::String<96>,
     header: [u8; HTTP_HEADER_CAPACITY],
@@ -60,7 +59,7 @@ struct Buffers {
 }
 
 impl Buffers {
-    fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             tcp_state: TcpClientState::new(),
             victoria_url: heapless::String::new(),
@@ -69,45 +68,42 @@ impl Buffers {
             message: logging::StructuredLogMessage::empty(),
         }
     }
+
+    pub fn initialize(&mut self) {
+        write!(
+            self.victoria_url,
+            "http://{}:{}{VICTORIA_PATH}",
+            config::HOME_SERVER_ADDRESS,
+            VICTORIA_LOGS_PORT
+        )
+        .expect("Victoria Logs URL exceeds capacity");
+    }
 }
 
-/// Starts the warning/error forwarder from a compact Embassy task.
-#[embassy_executor::task]
-pub async fn task(stack: Stack<'static>) -> ! {
-    Box::pin(run(stack)).await
+impl Default for Buffers {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// Forwards warning and error records to Victoria Logs as JSON Lines.
-async fn run(stack: Stack<'static>) -> ! {
-    // The display already reserves a large main stack. Keep the HTTP working
-    // set in the existing firmware heap, and do not allocate it until a record
-    // actually needs forwarding so MQTT startup retains its existing footprint.
-    let mut buffers: Option<Box<Buffers>> = None;
+#[embassy_executor::task]
+pub async fn task(stack: Stack<'static>, buffers: &'static mut Buffers) -> ! {
     let dns = FixedIpDns;
     let mut failed = false;
 
     loop {
         let message = logging::next_structured_log_message().await;
-        let buffers = buffers.get_or_insert_with(|| Box::new(Buffers::new()));
-        if buffers.victoria_url.is_empty() {
-            write!(
-                buffers.victoria_url,
-                "http://{}:{}{VICTORIA_PATH}",
-                config::HOME_SERVER_ADDRESS,
-                VICTORIA_LOGS_PORT
-            )
-            .expect("Victoria Logs URL exceeds capacity");
-        }
         buffers.message = message;
 
         loop {
             stack.wait_config_up().await;
             buffers.body.clear();
-            write!(buffers.body, "{}\n", buffers.message)
+            writeln!(buffers.body, "{}", buffers.message)
                 .expect("Victoria Logs body exceeds capacity");
 
             let result: Result<(), ()> = async {
-                let mut tcp_client = TcpClient::new(stack, &mut buffers.tcp_state);
+                let mut tcp_client = TcpClient::new(stack, &buffers.tcp_state);
                 tcp_client.set_timeout(Some(SOCKET_TIMEOUT));
                 let mut client = HttpClient::new(&tcp_client, &dns);
                 let request = with_timeout(

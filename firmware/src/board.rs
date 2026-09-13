@@ -16,12 +16,10 @@ pub const DISPLAY_TE_GPIO: u8 = 6;
 pub const BOOT_BUTTON_GPIO: u8 = 0;
 pub const KEY_BUTTON_GPIO: u8 = 18;
 
-/// Regular internal RAM reserved for `cosmic-text`, glyph caches, and radio allocations.
+/// Reclaimed internal RAM reserved exclusively for the closed-source Wi-Fi driver.
 ///
-/// Keep this bounded so the linker can retain at least 56 KiB for the CPU0 stack. Font shaping and
-/// rasterization use significantly more stack than the networking and display-driver paths.
-pub const FONT_HEAP_SIZE: usize = 169 * 1024;
-/// Boot-time memory reclaimed for the Wi-Fi driver and network allocations.
+/// Application tasks and the renderer use static or fixed-capacity storage. The vendor driver
+/// still requires bounded dynamic RX/TX packet copies and opaque connection-state allocations.
 pub const RADIO_HEAP_SIZE: usize = 64 * 1024;
 
 pub const HEARTBEAT_INTERVAL_SECS: u64 = 5;

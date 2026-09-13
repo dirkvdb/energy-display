@@ -2,6 +2,8 @@ use core::net::Ipv4Addr;
 
 pub const WIFI_SSID: &str = env!("WIFI_SSID");
 pub const WIFI_PASSWORD: &str = env!("WIFI_PASSWORD");
+pub const OTA_PASSWORD: &str = env!("MQTT_PASSWORD");
+pub const OTA_PORT: u16 = 3232;
 
 pub const NTP_SERVER_ADDRESS: Ipv4Addr = Ipv4Addr::new(192, 168, 1, 1);
 

@@ -46,6 +46,7 @@ in
     just
     material-design-icons
     pkg-config
+    python3
     rustup
   ];
 

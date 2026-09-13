@@ -21,8 +21,20 @@ firmware-check:
 firmware-build:
     cargo build -p energydisplay-firmware --target {{esp_target}} --release --locked -Z build-std=core,alloc
 
+firmware-build-debug:
+    cargo build -p energydisplay-firmware --target {{esp_target}} --features=debug --release --locked -Z build-std=core,alloc
+
+firmware-ota-image: firmware-build
+    espflash save-image --chip esp32s3 --flash-size 16mb --partition-table firmware/partitions.csv --target-app-partition ota_0 target/{{esp_target}}/release/energydisplay-firmware target/{{esp_target}}/release/energydisplay-firmware.bin
+
+ota-push host: firmware-ota-image
+    python3 tools/ota_push.py "{{host}}" target/{{esp_target}}/release/energydisplay-firmware.bin
+
 firmware-flash:
     cargo run -p energydisplay-firmware --target {{esp_target}} --release --locked -Z build-std=core,alloc
+
+firmware-flash-debug: firmware-build-debug
+    espflash flash --partition-table firmware/partitions.csv --target-app-partition factory --erase-parts otadata --monitor target/{{esp_target}}/release/energydisplay-firmware
 
 firmware-validate: firmware-fmt firmware-check
 
@@ -63,6 +75,7 @@ test: validate simulator-check
 build: firmware-build
 
 flash: firmware-flash
+flash-debug: firmware-flash-debug
 
 sim: simulator-tap-up
     trap 'just simulator-tap-down' EXIT; cargo run -p energydisplay-simulator --locked

@@ -21,14 +21,15 @@ pub const GRID_TOPIC: &str = "energy/p1/state";
 pub const SUMMARY_TOPIC: &str = "energy/daylysummary";
 
 pub const LIVE_SUBSCRIPTIONS: [&str; 8] = [
-    HEATPUMP_DATA_TOPIC,
-    HEATPUMP_POWER_TOPIC,
-    HEATPUMP_BACKUP_POWER_TOPIC,
-    HEATPUMP_STATUS_FILTER,
-    OUTDOOR_SENSOR_TOPIC,
     SOLAR_TOPIC,
     GARAGE_SOLAR_TOPIC,
     GRID_TOPIC,
+    HEATPUMP_DATA_TOPIC,
+    HEATPUMP_POWER_TOPIC,
+    HEATPUMP_BACKUP_POWER_TOPIC,
+    OUTDOOR_SENSOR_TOPIC,
+    // Keep the broad filter last so its retained/live traffic cannot delay exact filters.
+    HEATPUMP_STATUS_FILTER,
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

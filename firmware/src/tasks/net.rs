@@ -18,20 +18,38 @@ pub async fn connection_task(mut controller: WifiController<'static>) {
         match controller.connect_async().await {
             Ok(_) => {
                 info!("wifi: connected");
+                log_driver_heap("connect");
                 reconnect_delay_secs = INITIAL_RECONNECT_DELAY_SECS;
 
                 match controller.wait_for_disconnect_async().await {
                     Ok(_) => info!("wifi: disconnected"),
                     Err(error) => warn!("wifi: disconnect wait failed: {:?}", error),
                 }
+                log_driver_heap("disconnect");
             }
-            Err(error) => warn!("wifi: connection failed: {:?}", error),
+            Err(error) => {
+                warn!("wifi: connection failed: {:?}", error);
+                log_driver_heap("failed connect");
+            }
         }
 
         info!("wifi: retrying in {}s", reconnect_delay_secs);
         Timer::after(Duration::from_secs(reconnect_delay_secs)).await;
         reconnect_delay_secs = (reconnect_delay_secs * 2).min(MAX_RECONNECT_DELAY_SECS);
     }
+}
+
+fn log_driver_heap(event: &str) {
+    let stats = esp_alloc::HEAP.stats();
+    info!(
+        "wifi: driver heap after {}: current={} peak={} size={} allocated={} freed={}",
+        event,
+        stats.current_usage,
+        stats.max_usage,
+        stats.size,
+        stats.total_allocated,
+        stats.total_freed
+    );
 }
 
 pub async fn status_task(stack: Stack<'static>) {

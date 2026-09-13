@@ -18,7 +18,7 @@ pub struct StructuredLogMessage {
 }
 
 impl StructuredLogMessage {
-    pub fn empty() -> Self {
+    pub const fn empty() -> Self {
         Self {
             json: heapless::String::new(),
             persisted_panic: false,
