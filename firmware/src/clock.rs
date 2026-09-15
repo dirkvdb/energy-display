@@ -29,6 +29,7 @@ macro_rules! clock_log {
     };
 }
 
+#[cfg_attr(feature = "sim", allow(dead_code))]
 #[derive(Clone, Copy)]
 struct Anchor {
     utc: Timestamp,
@@ -62,9 +63,16 @@ pub fn now() -> Option<LocalDateTime> {
 }
 
 /// Returns UTC wall time, or `None` until the first successful synchronization.
+#[cfg(not(feature = "sim"))]
 pub fn utc_now() -> Option<Timestamp> {
     let anchor = CLOCK.lock(|clock| *clock.borrow())?;
     timestamp_at(Some(anchor), Instant::now())
+}
+
+/// Uses the host clock when the shared MQTT/model code runs in the simulator.
+#[cfg(feature = "sim")]
+pub fn utc_now() -> Option<Timestamp> {
+    Timestamp::try_from(std::time::SystemTime::now()).ok()
 }
 
 /// Synchronizes UTC over SNTP and keeps the last anchor through network outages.
@@ -147,6 +155,7 @@ fn ntp_timestamp(seconds: u64, fraction: u32, roundtrip_micros: u64) -> Result<T
     Ok(timestamp)
 }
 
+#[cfg_attr(feature = "sim", allow(dead_code))]
 fn timestamp_at(anchor: Option<Anchor>, instant: Instant) -> Option<Timestamp> {
     let anchor = anchor?;
     let elapsed = instant.checked_duration_since(anchor.instant)?;

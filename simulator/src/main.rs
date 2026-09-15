@@ -7,13 +7,13 @@ use dashboard_core::{
 use embassy_executor::{Executor, Spawner};
 use embassy_net::{Config, Ipv4Address, Ipv4Cidr, Runner, Stack, StackResources, StaticConfigV4};
 use embassy_net_tuntap::TunTapDevice;
-use embassy_time::{Duration, Instant, Timer, with_timeout};
+use embassy_time::{Duration, Timer, with_timeout};
 use embedded_graphics::{pixelcolor::BinaryColor, prelude::*};
 use embedded_graphics_simulator::{
     BinaryColorTheme, OutputSettingsBuilder, SimulatorDisplay, SimulatorEvent, Window,
     sdl2::Keycode,
 };
-use energydisplay_firmware::tasks::mqtt;
+use energydisplay_firmware::{clock, tasks::mqtt};
 use static_cell::StaticCell;
 
 #[cfg(test)]
@@ -124,18 +124,8 @@ fn network_seed() -> u64 {
         ^ u64::from(std::process::id())
 }
 
-/// Temporary monotonic display time matching the firmware until RTC/SNTP is implemented.
 fn application_time() -> LocalDateTime {
-    const START_MINUTE_OF_DAY: u64 = 12 * 60 + 34;
-    let minute_of_day = (START_MINUTE_OF_DAY + Instant::now().as_secs() / 60) % (24 * 60);
-    LocalDateTime::new(
-        2026,
-        9,
-        9,
-        3,
-        (minute_of_day / 60) as u8,
-        (minute_of_day % 60) as u8,
-    )
+    clock::now().expect("host system time is outside the supported range")
 }
 
 #[cfg(test)]

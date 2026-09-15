@@ -1,10 +1,12 @@
 use core::str;
 
-use serde::de::DeserializeOwned;
+use serde::Deserialize;
 
+use jiff::tz::TimeZone;
+
+use crate::model::{DailySummary, HourlyData, PowerData, Update};
 #[cfg(test)]
 use crate::model::{GarageSolarData, SolarData};
-use crate::model::{PowerData, Update};
 
 pub const HEATPUMP_DATA_TOPIC: &str = "espaltherma/ATTR";
 pub const HEATPUMP_POWER_TOPIC: &str = "home/zigbee/HeatpumpPower";
@@ -58,11 +60,12 @@ pub fn decode_update(topic: &str, payload: &[u8]) -> Result<Update, DecodeError>
         SOLAR_TOPIC => decode_json(payload).map(Update::Solar),
         GARAGE_SOLAR_TOPIC => decode_json(payload).map(Update::GarageSolar),
         GRID_TOPIC => decode_json(payload).map(Update::Grid),
+        SUMMARY_TOPIC => decode_summary(payload),
         _ => Err(DecodeError::UnknownTopic),
     }
 }
 
-fn decode_json<T: DeserializeOwned>(payload: &[u8]) -> Result<T, DecodeError> {
+fn decode_json<'a, T: serde::Deserialize<'a>>(payload: &'a [u8]) -> Result<T, DecodeError> {
     let (value, consumed) =
         serde_json_core::from_slice(payload).map_err(|_| DecodeError::InvalidPayload)?;
     if payload[consumed..]
@@ -73,6 +76,29 @@ fn decode_json<T: DeserializeOwned>(payload: &[u8]) -> Result<T, DecodeError> {
     } else {
         Err(DecodeError::TrailingData)
     }
+}
+
+#[derive(Deserialize)]
+struct DailySummaryWire {
+    timestamp: heapless::String<32>,
+    grid_import: HourlyData,
+    grid_export: HourlyData,
+    solar_production: HourlyData,
+}
+
+fn decode_summary(payload: &[u8]) -> Result<Update, DecodeError> {
+    let summary: DailySummaryWire = decode_json(payload)?;
+    let timestamp: jiff::Timestamp = summary
+        .timestamp
+        .as_str()
+        .parse()
+        .map_err(|_| DecodeError::InvalidPayload)?;
+    Ok(Update::DailySummary(DailySummary {
+        date: timestamp.to_zoned(TimeZone::UTC).date(),
+        solar_production: summary.solar_production,
+        grid_import: summary.grid_import,
+        grid_export: summary.grid_export,
+    }))
 }
 
 fn decode_number(payload: &[u8]) -> Result<f64, DecodeError> {
@@ -89,6 +115,23 @@ fn decode_relay(payload: &[u8]) -> Result<bool, DecodeError> {
 mod tests {
     use super::*;
     use crate::model::{HeatpumpData, TemperatureData, Update};
+
+    #[test]
+    fn decodes_current_day_summary_payload() {
+        let payload = br#"{
+            "timestamp":"2026-09-09T12:00:00Z",
+            "grid_import":{"values_at_hour_start":[1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],"values":[100.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0]},
+            "grid_export":{"values_at_hour_start":[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],"values":[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0]},
+            "solar_production":{"values_at_hour_start":[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,2.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],"values":[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,300.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0]}
+        }"#;
+
+        let Update::DailySummary(summary) = decode_update(SUMMARY_TOPIC, payload).unwrap() else {
+            panic!("summary topic did not decode to a summary update");
+        };
+        assert_eq!(summary.date, jiff::civil::date(2026, 9, 9));
+        assert_eq!(summary.grid_import.values[0], 100.0);
+        assert_eq!(summary.solar_production.values[12], 300.0);
+    }
 
     #[test]
     fn decodes_all_live_payload_kinds() {

@@ -8,6 +8,7 @@ publish = false
 [dependencies]
 embedded-graphics = "=0.8.2"
 heapless = "=0.8.0"
+jiff = { version = "=0.2.35", default-features = false, features = ["static"] }
 num-traits = { version = "=0.2.19", default-features = false }
 serde = { version = "=1.0.229", default-features = false, features = ["derive"] }
 serde-json-core = "=0.6.0"

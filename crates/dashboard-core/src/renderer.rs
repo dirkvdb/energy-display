@@ -79,8 +79,6 @@ impl DashboardRenderer {
             HEIGHT as i32 - MARGIN_VERTICAL,
         );
         let width = (bottom_right.x - top_left.x) as u32;
-        let height = (bottom_right.y - top_left.y) as u32;
-        let outer = Rectangle::new(top_left, Size::new(width, height));
         let energy = Rectangle::new(top_left, Size::new(width, ROW_HEIGHT));
         let battery = Rectangle::new(Point::new(top_left.x, 75), Size::new(width, ROW_HEIGHT / 2));
         let status_bar = Rectangle::new(
@@ -98,7 +96,6 @@ impl DashboardRenderer {
         self.render_graph(display, graph, status)?;
         self.render_status_bar(display, status_bar, now.into())?;
         self.render_heatpump_row(display, heatpump, status)?;
-        draw_rectangle(display, outer, BLACK, None)?;
         Ok(())
     }
 
@@ -178,7 +175,7 @@ impl DashboardRenderer {
             )?;
         }
 
-        draw_rectangle(display, bounds, BLACK, None)
+        draw_horizontal_separator(display, bounds, false)
     }
 
     fn render_battery_row<D>(
@@ -224,7 +221,7 @@ impl DashboardRenderer {
             FONT_SIZE_BATTERY,
             Alignment::Center,
         )?;
-        draw_rectangle(display, bounds, BLACK, None)
+        draw_horizontal_separator(display, bounds, false)
     }
 
     fn render_graph<D>(
@@ -455,7 +452,7 @@ impl DashboardRenderer {
             Alignment::Center,
         )?;
 
-        draw_rectangle(display, bounds, BLACK, None)
+        draw_horizontal_separator(display, bounds, true)
     }
 }
 
@@ -565,6 +562,27 @@ where
         FONT_SIZE_SUBTEXT,
         Alignment::Center,
     )
+}
+
+fn draw_horizontal_separator<D>(
+    display: &mut D,
+    bounds: Rectangle,
+    at_top: bool,
+) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = BinaryColor>,
+{
+    let y = if at_top {
+        bounds.top_left.y
+    } else {
+        bounds.top_left.y + bounds.size.height as i32 - 1
+    };
+    Line::new(
+        Point::new(bounds.top_left.x, y),
+        Point::new(bounds.top_left.x + bounds.size.width as i32 - 1, y),
+    )
+    .into_styled(PrimitiveStyle::with_stroke(BLACK, 1))
+    .draw(display)
 }
 
 fn draw_rectangle<D>(
@@ -680,9 +698,9 @@ mod tests {
     fn complete_frames_match_cosmic_text_reference() {
         let fixture = test_dashboard().status;
         for (status, now, split, expected) in [
-            (&fixture, Some(FIXTURE_TIME), true, 0x8ebd_80b2_9a1e_e8eb),
-            (&fixture, Some(FIXTURE_TIME), false, 0x3e5d_8273_53ce_2ac1),
-            (&EnergyStatus::default(), None, true, 0xb3c2_9d9f_6adb_da96),
+            (&fixture, Some(FIXTURE_TIME), true, 0x15ae_e341_2311_5100),
+            (&fixture, Some(FIXTURE_TIME), false, 0x8bf4_6348_6dec_d552),
+            (&EnergyStatus::default(), None, true, 0xf0a3_b753_b013_0da7),
         ] {
             let mut display = Framebuffer::new();
             display.clear(WHITE).unwrap();

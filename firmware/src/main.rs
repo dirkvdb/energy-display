@@ -3,7 +3,7 @@
 
 use core::mem::MaybeUninit;
 
-use dashboard_core::{Dashboard, DashboardRenderer};
+use dashboard_core::{Dashboard, DashboardRenderer, model::Update};
 use display_interface_spi::SPIInterface;
 use embassy_executor::Spawner;
 use embassy_futures::join::{join, join5};
@@ -11,8 +11,8 @@ use embassy_net::StackResources;
 use embassy_time::Timer;
 use embedded_hal_bus::spi::ExclusiveDevice;
 use energydisplay_firmware::{
-    MAX_POST_BOOT_RUST_ALLOCATION_SIZE, board, clock, config, display, logging, panic_store,
-    seal_allocator,
+    BUILD_ID, MAX_POST_BOOT_RUST_ALLOCATION_SIZE, board, clock, config, display, logging,
+    panic_store, seal_allocator,
     tasks::{buttons, mqtt, net, ota, structured_log},
 };
 use esp_backtrace as _;
@@ -58,7 +58,7 @@ async fn main(spawner: Spawner) -> ! {
         Ok(None) => {}
         Err(error) => log::error!("panic storage initialization failed: {:?}", error),
     }
-    info!("energydisplay firmware starting");
+    info!("energydisplay firmware starting; build_id={}", BUILD_ID);
     #[cfg(feature = "debug")]
     info!("DEBUG ENABLED!");
 
@@ -231,9 +231,32 @@ async fn main(spawner: Spawner) -> ! {
         loop {
             let update = mqtt::UPDATES.receive().await;
             let now = clock::now();
+            let mut non_summary_update = !matches!(update, Update::DailySummary(_));
+            let mut summary_received = match update {
+                Update::DailySummary(summary) => now.is_none_or(|now| summary.is_for(now)),
+                _ => false,
+            };
             dashboard.apply(update, now);
             while let Ok(update) = mqtt::UPDATES.try_receive() {
+                non_summary_update |= !matches!(update, Update::DailySummary(_));
+                if let Update::DailySummary(summary) = update {
+                    summary_received |= now.is_none_or(|now| summary.is_for(now));
+                }
                 dashboard.apply(update, now);
+            }
+
+            if let Some(timestamp) = clock::utc_now()
+                && (non_summary_update || summary_received)
+            {
+                mqtt::queue_summary_update(mqtt::SummaryUpdate {
+                    snapshot: mqtt::SummarySnapshot {
+                        timestamp,
+                        grid_import: dashboard.status.grid_import_hourly,
+                        grid_export: dashboard.status.grid_export_hourly,
+                        solar_production: dashboard.status.solar_production_hourly,
+                    },
+                    summary_received_at: summary_received.then_some(timestamp),
+                });
             }
 
             #[cfg(feature = "debug")]

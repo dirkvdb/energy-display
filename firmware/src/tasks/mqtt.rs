@@ -1,27 +1,30 @@
-use core::num::NonZero;
+use core::{fmt::Write as _, num::NonZero};
 
 use dashboard_core::{
-    model::Update,
-    routing::{LIVE_SUBSCRIPTIONS, decode_update},
+    model::{HourlyData, Update},
+    routing::{LIVE_SUBSCRIPTIONS, SUMMARY_TOPIC, decode_update},
 };
-use embassy_futures::select::{Either, select};
+use embassy_futures::select::{Either, Either3, select, select3};
 use embassy_net::{Stack, tcp::TcpSocket};
 use embassy_sync::{
     blocking_mutex::raw::CriticalSectionRawMutex,
     channel::{Channel, TrySendError},
 };
-use embassy_time::{Duration, Ticker, Timer, with_timeout};
+use embassy_time::{Duration, Instant, Ticker, Timer, with_timeout};
+use jiff::tz::TimeZone;
 use rust_mqtt::{
+    Bytes,
     buffer::BumpBuffer,
     client::{
         Client, MqttError,
         event::Event,
-        options::{ConnectOptions, SubscriptionOptions},
+        options::{ConnectOptions, PublicationOptions, SubscriptionOptions, TopicReference},
     },
     config::{KeepAlive, SessionExpiryInterval},
     session::Session,
-    types::{MqttBinary, MqttString, ReasonCode, TopicFilter},
+    types::{MqttBinary, MqttString, PacketIdentifier, TopicFilter, TopicName},
 };
+use serde::Serialize;
 
 use crate::config;
 
@@ -32,11 +35,12 @@ macro_rules! mqtt_log {
 }
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
-const SOCKET_TIMEOUT: Duration = Duration::from_secs(30);
+const SOCKET_TIMEOUT: Duration = Duration::from_secs(120);
 const RECONNECT_DELAY: Duration = Duration::from_secs(10);
 const PING_INTERVAL: Duration = Duration::from_secs(90);
+const SUMMARY_RESTORE_TIMEOUT: Duration = Duration::from_secs(10);
 
-const MAX_SUBSCRIBES: usize = 1;
+const MAX_SUBSCRIBES: usize = 9;
 const RECEIVE_MAXIMUM: usize = 8;
 const SEND_MAXIMUM: usize = 1;
 const MAX_SUBSCRIPTION_IDENTIFIERS: usize = 0;
@@ -46,6 +50,31 @@ pub const RECEIVE_SCRATCH_BYTES: usize = 4096;
 pub const UPDATE_QUEUE_DEPTH: usize = 8;
 
 pub static UPDATES: Channel<CriticalSectionRawMutex, Update, UPDATE_QUEUE_DEPTH> = Channel::new();
+
+const SUMMARY_PAYLOAD_BYTES: usize = RECEIVE_SCRATCH_BYTES;
+const SUMMARY_PUBLICATION_QUEUE_DEPTH: usize = 1;
+
+#[derive(Clone, Copy)]
+pub struct SummarySnapshot {
+    pub timestamp: jiff::Timestamp,
+    pub grid_import: HourlyData,
+    pub grid_export: HourlyData,
+    pub solar_production: HourlyData,
+}
+
+#[derive(Clone, Copy)]
+pub struct SummaryUpdate {
+    pub snapshot: SummarySnapshot,
+    /// Time at which a current-day summary was received. This advances the
+    /// publication watermark without immediately echoing the retained payload.
+    pub summary_received_at: Option<jiff::Timestamp>,
+}
+
+pub static SUMMARY_PUBLICATIONS: Channel<
+    CriticalSectionRawMutex,
+    SummaryUpdate,
+    SUMMARY_PUBLICATION_QUEUE_DEPTH,
+> = Channel::new();
 
 pub struct Buffers {
     tcp_rx: [u8; TCP_BUFFER_BYTES],
@@ -76,6 +105,7 @@ type MqttSession = Session<RECEIVE_MAXIMUM, SEND_MAXIMUM>;
 
 pub async fn run(stack: Stack<'static>, buffers: &'static mut Buffers) {
     let mut session = MqttSession::default();
+    let mut last_summary_update = None;
 
     loop {
         stack.wait_config_up().await;
@@ -151,7 +181,7 @@ pub async fn run(stack: Stack<'static>, buffers: &'static mut Buffers) {
         // The CONNACK event has been dropped, so no references into scratch remain.
         unsafe { client.buffer_mut().reset() };
 
-        match run_session(&mut client, session_present).await {
+        match run_session(&mut client, session_present, &mut last_summary_update).await {
             Ok(never) => match never {},
             Err(error) => log::warn!("mqtt: session failed: {:?}", error),
         }
@@ -166,76 +196,156 @@ pub async fn run(stack: Stack<'static>, buffers: &'static mut Buffers) {
 async fn run_session<'a>(
     client: &mut MqttClient<'a>,
     session_present: bool,
+    last_summary_update: &mut Option<jiff::Timestamp>,
 ) -> Result<core::convert::Infallible, MqttError<'a>> {
+    clear_summary_publications();
+    if session_present {
+        mqtt_log!("mqtt: resuming existing session");
+    }
+
     for topic in LIVE_SUBSCRIPTIONS {
-        subscribe(client, topic).await?;
+        request_subscription(client, topic).await?;
+    }
+
+    mqtt_log!("mqtt: restoring daily summary");
+    request_subscription(client, SUMMARY_TOPIC).await?;
+    let restore = restore_daily_summary(client).await?;
+    request_unsubscribe(client, SUMMARY_TOPIC).await?;
+
+    let mut awaiting_restored_snapshot = restore.await_snapshot;
+    if !awaiting_restored_snapshot {
+        clear_summary_publications();
     }
 
     mqtt_log!(
-        "mqtt: subscribed to {} live filters (session_present={})",
+        "mqtt: subscribed to {} live filters; daily summary restore complete (session_present={})",
         LIVE_SUBSCRIPTIONS.len(),
         session_present
     );
 
     let mut ping = Ticker::every(PING_INTERVAL);
     loop {
-        match select(client.poll_header(), ping.next()).await {
-            Either::First(header) => {
+        match select3(
+            SUMMARY_PUBLICATIONS.receive(),
+            client.poll_header(),
+            ping.next(),
+        )
+        .await
+        {
+            Either3::First(summary) => {
+                if !summary_ready_to_publish(&mut awaiting_restored_snapshot, &summary) {
+                    continue;
+                }
+                if let Err(error) =
+                    publish_summary_if_needed(client, summary, last_summary_update).await
+                {
+                    queue_summary_update(summary);
+                    return Err(error);
+                }
+            }
+            Either3::Second(header) => {
                 let event = client.poll_body(header?).await?;
                 let update = decode_event(event);
 
                 // The event and all references into scratch have been dropped.
                 unsafe { client.buffer_mut().reset() };
 
-                if let Some(update) = update {
-                    queue_update(update);
+                match update {
+                    Some(Update::DailySummary(_)) => {
+                        log::debug!("mqtt: ignoring daily summary after one-shot restore");
+                    }
+                    Some(update) => queue_update(update),
+                    None => {}
                 }
             }
-            Either::Second(_) => client.ping().await?,
+            Either3::Third(_) => client.ping().await?,
         }
     }
 }
 
-async fn subscribe<'a>(
-    client: &mut MqttClient<'a>,
-    topic: &'static str,
-) -> Result<(), MqttError<'a>> {
-    let filter = TopicFilter::new_unchecked(MqttString::from_str_unchecked(topic));
-    let packet_identifier = client
-        .subscribe(filter, SubscriptionOptions::new().exactly_once())
-        .await?;
+#[derive(Clone, Copy, Default)]
+struct RestoreObservation {
+    seen: bool,
+    await_snapshot: bool,
+}
 
+async fn restore_daily_summary<'a>(
+    client: &mut MqttClient<'a>,
+) -> Result<RestoreObservation, MqttError<'a>> {
+    let deadline = Instant::now().saturating_add(SUMMARY_RESTORE_TIMEOUT);
     loop {
-        let header = client.poll_header().await?;
-        let event = client.poll_body(header).await?;
-        let mut acknowledged = false;
-        let update = match event {
-            Event::Suback(ack) if ack.packet_identifier == packet_identifier => {
-                if ack.reason_code != ReasonCode::GrantedQoS2 {
-                    log::warn!(
-                        "mqtt: broker rejected QoS 2 subscription to {}: {:?}",
-                        topic,
-                        ack.reason_code
-                    );
-                    return Err(MqttError::Server);
-                }
-                acknowledged = true;
-                None
+        let header = match select(Timer::at(deadline), client.poll_header()).await {
+            Either::First(_) => {
+                log::warn!("mqtt: no retained daily summary received within 10s");
+                return Ok(RestoreObservation::default());
             }
-            event => decode_event(event),
+            Either::Second(header) => header?,
         };
+        let event = client.poll_body(header).await?;
+        let update = decode_event(event);
 
         // The event and all references into scratch have been dropped.
         unsafe { client.buffer_mut().reset() };
 
-        if let Some(update) = update {
-            queue_update(update);
-        }
-        if acknowledged {
-            mqtt_log!("mqtt: subscribed {}", topic);
-            return Ok(());
+        let Some(update) = update else {
+            continue;
+        };
+        let observation = queue_incoming_update(update);
+        if observation.seen {
+            return Ok(observation);
         }
     }
+}
+
+async fn request_subscription<'a>(
+    client: &mut MqttClient<'a>,
+    topic: &'static str,
+) -> Result<PacketIdentifier, MqttError<'a>> {
+    let filter = TopicFilter::new_unchecked(MqttString::from_str_unchecked(topic));
+    let packet_identifier = client
+        .subscribe(filter, SubscriptionOptions::new().exactly_once())
+        .await?;
+    mqtt_log!(
+        "mqtt: requested subscription to {} (packet_id={:?})",
+        topic,
+        packet_identifier
+    );
+    Ok(packet_identifier)
+}
+
+async fn request_unsubscribe<'a>(
+    client: &mut MqttClient<'a>,
+    topic: &'static str,
+) -> Result<(), MqttError<'a>> {
+    let filter = TopicFilter::new_unchecked(MqttString::from_str_unchecked(topic));
+    let packet_identifier = client.unsubscribe(filter).await?;
+    mqtt_log!(
+        "mqtt: requested unsubscription from {} (packet_id={:?})",
+        topic,
+        packet_identifier
+    );
+    Ok(())
+}
+
+fn queue_incoming_update(update: Update) -> RestoreObservation {
+    let observation = match update {
+        Update::DailySummary(summary) => {
+            let current = crate::clock::now().is_none_or(|now| summary.is_for(now));
+            clear_summary_publications();
+            if current {
+                mqtt_log!("mqtt: retained daily summary received");
+            } else {
+                log::warn!("mqtt: retained daily summary is from another day");
+            }
+            RestoreObservation {
+                seen: true,
+                await_snapshot: current && crate::clock::utc_now().is_some(),
+            }
+        }
+        _ => RestoreObservation::default(),
+    };
+    queue_update(update);
+    observation
 }
 
 fn queue_update(update: Update) {
@@ -246,9 +356,133 @@ fn queue_update(update: Update) {
     }
 }
 
+fn clear_summary_publications() {
+    while SUMMARY_PUBLICATIONS.try_receive().is_ok() {}
+}
+
+fn summary_ready_to_publish(awaiting_restore: &mut bool, update: &SummaryUpdate) -> bool {
+    if *awaiting_restore && update.summary_received_at.is_none() {
+        return false;
+    }
+    *awaiting_restore = false;
+    true
+}
+
+pub fn queue_summary_update(mut update: SummaryUpdate) {
+    if let Err(TrySendError::Full(returned)) = SUMMARY_PUBLICATIONS.try_send(update) {
+        update = returned;
+        // Keep the newest state, but do not lose a restore watermark while
+        // updates coalesce during bursts or a reconnect.
+        if let Ok(previous) = SUMMARY_PUBLICATIONS.try_receive()
+            && update.summary_received_at.is_none()
+        {
+            update.summary_received_at = previous.summary_received_at;
+        }
+        let _ = SUMMARY_PUBLICATIONS.try_send(update);
+    }
+}
+
+#[derive(Serialize)]
+struct DailySummaryWire<'a> {
+    timestamp: &'a str,
+    grid_import: &'a HourlyData,
+    grid_export: &'a HourlyData,
+    solar_production: &'a HourlyData,
+}
+
+fn encode_summary<'a>(
+    snapshot: &'a SummarySnapshot,
+    timestamp: &'a str,
+    payload: &mut [u8],
+) -> Result<usize, serde_json_core::ser::Error> {
+    serde_json_core::to_slice(
+        &DailySummaryWire {
+            timestamp,
+            grid_import: &snapshot.grid_import,
+            grid_export: &snapshot.grid_export,
+            solar_production: &snapshot.solar_production,
+        },
+        payload,
+    )
+}
+
+async fn publish_summary_if_needed<'a>(
+    client: &mut MqttClient<'a>,
+    update: SummaryUpdate,
+    last_summary_update: &mut Option<jiff::Timestamp>,
+) -> Result<(), MqttError<'a>> {
+    let snapshot = update.snapshot;
+    if let Some(received_at) = update.summary_received_at {
+        *last_summary_update = Some(received_at);
+    }
+    if last_summary_update.is_some_and(|previous| same_utc_hour(previous, snapshot.timestamp)) {
+        return Ok(());
+    }
+
+    let mut timestamp = heapless::String::<32>::new();
+    if write!(&mut timestamp, "{}", snapshot.timestamp).is_err() {
+        log::warn!("mqtt: failed to format daily summary timestamp");
+        return Ok(());
+    }
+
+    let mut payload = [0u8; SUMMARY_PAYLOAD_BYTES];
+    let length = match encode_summary(&snapshot, timestamp.as_str(), &mut payload) {
+        Ok(length) => length,
+        Err(error) => {
+            log::warn!("mqtt: failed to encode daily summary: {:?}", error);
+            return Ok(());
+        }
+    };
+
+    let topic = TopicName::new_unchecked(MqttString::from_str_unchecked(SUMMARY_TOPIC));
+    let options = PublicationOptions::new(TopicReference::Name(topic))
+        .at_least_once()
+        .retain();
+    let pending = client
+        .session()
+        .pending_client_publishes
+        .first()
+        .map(|publication| publication.packet_identifier);
+    if let Some(packet_identifier) = pending {
+        client
+            .republish(packet_identifier, &options, Bytes::from(&payload[..length]))
+            .await?;
+    } else {
+        client
+            .publish(&options, Bytes::from(&payload[..length]))
+            .await?;
+    }
+    *last_summary_update = Some(snapshot.timestamp);
+    mqtt_log!("mqtt: published daily summary at {}", timestamp);
+    Ok(())
+}
+
+fn same_utc_hour(left: jiff::Timestamp, right: jiff::Timestamp) -> bool {
+    let left = left.to_zoned(TimeZone::UTC);
+    let right = right.to_zoned(TimeZone::UTC);
+    left.date() == right.date() && left.hour() == right.hour()
+}
+
 fn decode_event(event: Event<'_, MAX_SUBSCRIPTION_IDENTIFIERS>) -> Option<Update> {
-    let Event::Publish(publication) = event else {
-        return None;
+    let publication = match event {
+        Event::Publish(publication) => publication,
+        Event::Suback(ack) => {
+            mqtt_log!(
+                "mqtt: subscription acknowledged (packet_id={:?}, reason={:?})",
+                ack.packet_identifier,
+                ack.reason_code
+            );
+            return None;
+        }
+        Event::Unsuback(ack) => {
+            mqtt_log!(
+                "mqtt: unsubscription acknowledged (packet_id={:?}, reason={:?})",
+                ack.packet_identifier,
+                ack.reason_code
+            );
+            return None;
+        }
+        _ => return None,
     };
 
     let topic = publication.topic.as_ref().as_str();
@@ -259,5 +493,79 @@ fn decode_event(event: Event<'_, MAX_SUBSCRIPTION_IDENTIFIERS>) -> Option<Update
             log::warn!("mqtt: rejected payload on {}: {:?}", topic, error);
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn snapshot(timestamp: jiff::Timestamp) -> SummarySnapshot {
+        let mut grid_import = HourlyData::default();
+        grid_import.values_at_hour_start[0] = 0.000977;
+        grid_import.values[0] = 51.757;
+        let mut grid_export = HourlyData::default();
+        grid_export.values_at_hour_start[12] = 1.929688;
+        grid_export.values[12] = 4227.539;
+        let mut solar_production = HourlyData::default();
+        solar_production.values_at_hour_start[17] = 46.5;
+        solar_production.values[17] = 700.0;
+        SummarySnapshot {
+            timestamp,
+            grid_import,
+            grid_export,
+            solar_production,
+        }
+    }
+
+    #[test]
+    fn summary_payload_round_trips_through_shared_decoder() {
+        let timestamp: jiff::Timestamp = "2026-09-15T17:00:00.236376961Z".parse().unwrap();
+        let snapshot = snapshot(timestamp);
+        let mut formatted = heapless::String::<32>::new();
+        write!(&mut formatted, "{timestamp}").unwrap();
+        let mut payload = [0; SUMMARY_PAYLOAD_BYTES];
+        let length = encode_summary(&snapshot, formatted.as_str(), &mut payload).unwrap();
+
+        let Update::DailySummary(summary) =
+            decode_update(SUMMARY_TOPIC, &payload[..length]).unwrap()
+        else {
+            panic!("encoded summary did not decode as a daily summary");
+        };
+        assert_eq!(summary.date, jiff::civil::date(2026, 9, 15));
+        assert_eq!(summary.grid_import.values[0], 51.757);
+        assert_eq!(summary.grid_export.values[12], 4227.539);
+        assert_eq!(summary.solar_production.values[17], 700.0);
+    }
+
+    #[test]
+    fn partial_snapshots_are_suppressed_until_restored_state_arrives() {
+        let timestamp: jiff::Timestamp = "2026-09-15T17:00:00Z".parse().unwrap();
+        let mut awaiting_restore = true;
+        let partial = SummaryUpdate {
+            snapshot: snapshot(timestamp),
+            summary_received_at: None,
+        };
+        let restored = SummaryUpdate {
+            snapshot: snapshot(timestamp),
+            summary_received_at: Some(timestamp),
+        };
+
+        assert!(!summary_ready_to_publish(&mut awaiting_restore, &partial));
+        assert!(awaiting_restore);
+        assert!(summary_ready_to_publish(&mut awaiting_restore, &restored));
+        assert!(!awaiting_restore);
+    }
+
+    #[test]
+    fn hourly_publish_guard_uses_utc_date_and_hour() {
+        let first: jiff::Timestamp = "2026-09-15T17:00:00Z".parse().unwrap();
+        let same: jiff::Timestamp = "2026-09-15T17:59:59Z".parse().unwrap();
+        let next: jiff::Timestamp = "2026-09-15T18:00:00Z".parse().unwrap();
+        let next_day: jiff::Timestamp = "2026-09-16T17:00:00Z".parse().unwrap();
+
+        assert!(same_utc_hour(first, same));
+        assert!(!same_utc_hour(first, next));
+        assert!(!same_utc_hour(first, next_day));
     }
 }

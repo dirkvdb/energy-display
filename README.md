@@ -2,7 +2,7 @@
 
 Bare-metal Rust port of `../inky-solar` for the Waveshare ESP32-S3-RLCD-4.2. Board support is validated, and the firmware renders the source application's Advanced dashboard from a shared `no_std` model and renderer. It connects to Wi-Fi with Embassy, receives live MQTT v5 telemetry through a bounded `rust-mqtt` client, supports authenticated over-the-air firmware updates, and redraws the display for each accepted update.
 
-See [`PORTING_PLAN.md`](PORTING_PLAN.md) for the remaining RTC, retained-summary, and reliability work.
+See [`PORTING_PLAN.md`](PORTING_PLAN.md) for the remaining RTC and reliability work.
 
 ## Current hardware target
 
@@ -102,7 +102,7 @@ just flash
 just monitor
 ```
 
-`just flash` builds the release image and flashes it. The separate monitor command is intentionally interactive and runs until stopped.
+`just flash` generates a unique UTC build ID, rebuilds the release image with that ID embedded, prints the ELF SHA-256 checksum, flashes that exact ELF, and opens the serial monitor. The first boot line repeats `build_id=...`; it must match the ID printed before compilation. `just monitor` reconnects to the serial console without flashing.
 
 The first OTA-capable installation must be made over USB with `just flash`; this installs the new factory/OTA partition table. Subsequent releases can be pushed over Wi-Fi:
 
@@ -114,10 +114,10 @@ The device listens on TCP port 3232. The upload metadata is authenticated with H
 
 Acceptance checks:
 
-1. The serial log reaches `display: empty dashboard rendered` without a panic.
+1. The serial log starts with `energydisplay firmware starting; build_id=...`, matching the build ID printed by `just flash`, and reaches `display: empty dashboard rendered` without a panic.
 2. Wi-Fi reports `wifi: connected`, followed by `network: DHCP address ...`.
-3. MQTT reports a TCP connection and eight successful subscription acknowledgements, followed by `mqtt: subscribed to 8 live filters ...`.
-4. Published telemetry produces `display: dashboard updated` and appears in the corresponding dashboard fields.
+3. MQTT reports a TCP connection, eight persistent live subscriptions, a retained daily-summary restore, and `mqtt: requested unsubscription from energy/daylysummary` before hourly publication is enabled.
+4. Published telemetry produces `display: dashboard updated` and appears in the corresponding dashboard fields; when the UTC hour changes, the current hourly summary is republished retained on `energy/daylysummary`.
 5. Disconnecting the access point produces Wi-Fi/network/MQTT failure logs while the last dashboard frame remains visible; restoring it reconnects and resubscribes.
 6. Repeating Wi-Fi disconnect/reconnect cycles returns `wifi: driver heap after disconnect` to a stable baseline and never reports an allocation failure.
 7. The complete outer border is visible and stable, and `heartbeat: dashboard displayed` continues every five seconds.
@@ -143,7 +143,7 @@ If the panel remains blank or is unstable, keep SPI at 10 MHz and compare the in
 │       ├── logging.rs       # Serial + structured JSON fan-out logger
 │       ├── panic_store.rs   # Flash-backed panic handler and record codec
 │       ├── tasks/
-│       │   ├── mqtt.rs      # Bounded MQTT v5 client and typed update channel
+│       ├── mqtt.rs      # Bounded MQTT v5 client, summary publisher, and typed update channel
 │       │   ├── net.rs       # Wi-Fi reconnect, DHCP status, and network runner
 │       │   ├── ota.rs       # Authenticated OTA receiver and A/B slot activation
 │       │   └── structured_log.rs # Victoria Logs HTTP forwarder

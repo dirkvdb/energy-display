@@ -1,5 +1,8 @@
 #![no_std]
 
+#[cfg(feature = "sim")]
+extern crate std;
+
 #[cfg(target_arch = "xtensa")]
 use core::{
     alloc::{GlobalAlloc, Layout},
@@ -19,6 +22,12 @@ static GLOBAL_ALLOCATOR: BoundedPostBootAllocator = BoundedPostBootAllocator;
 static RUST_ALLOCATIONS_ALLOWED: AtomicBool = AtomicBool::new(true);
 #[cfg(target_arch = "xtensa")]
 static REJECTED_ALLOCATION_SIZE: AtomicUsize = AtomicUsize::new(0);
+
+/// Unique identifier injected by `just flash`; ordinary builds use `development`.
+pub const BUILD_ID: &str = match option_env!("ENERGY_DISPLAY_BUILD_ID") {
+    Some(build_id) => build_id,
+    None => "development",
+};
 
 /// Maximum individual Rust allocation permitted after boot for radio/RTOS bookkeeping.
 pub const MAX_POST_BOOT_RUST_ALLOCATION_SIZE: usize = 1024;

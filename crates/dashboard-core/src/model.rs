@@ -91,7 +91,7 @@ impl LocalDateTime {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct HourlyData {
     pub values_at_hour_start: [f64; 24],
     pub values: [f64; 24],
@@ -131,7 +131,7 @@ impl HourlyData {
 
         let hour_changed = self
             .last_update
-            .is_none_or(|previous| previous.hour != now.hour);
+            .is_some_and(|previous| previous.hour != now.hour);
         if date_changed || hour_changed || !self.baseline_present[hour] {
             self.set_baseline(hour, cumulative_kwh);
         } else {
@@ -153,6 +153,16 @@ impl HourlyData {
     pub fn mark_restored(&mut self, now: LocalDateTime) {
         self.last_update = Some(now);
         self.last_value = None;
+        self.mark_baselines_present();
+    }
+
+    pub fn mark_restored_without_time(&mut self) {
+        self.last_update = None;
+        self.last_value = None;
+        self.mark_baselines_present();
+    }
+
+    fn mark_baselines_present(&mut self) {
         for hour in 0..24 {
             self.baseline_present[hour] = self.values_at_hour_start[hour] != 0.0;
         }
@@ -189,6 +199,24 @@ pub struct EnergyStatus {
     pub grid_export_hourly: HourlyData,
 }
 
+pub type SummaryDate = jiff::civil::Date;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DailySummary {
+    pub date: SummaryDate,
+    pub solar_production: HourlyData,
+    pub grid_import: HourlyData,
+    pub grid_export: HourlyData,
+}
+
+impl DailySummary {
+    pub fn is_for(self, now: LocalDateTime) -> bool {
+        i32::from(self.date.year()) == now.year
+            && self.date.month() as u8 == now.month
+            && self.date.day() as u8 == now.day
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Update {
     Heatpump(HeatpumpData),
@@ -201,6 +229,7 @@ pub enum Update {
     Solar(SolarData),
     GarageSolar(GarageSolarData),
     Grid(GridData),
+    DailySummary(DailySummary),
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -243,6 +272,26 @@ impl Dashboard {
                     self.status
                         .grid_import_hourly
                         .append_value(grid.power_import_today, now);
+                }
+            }
+            Update::DailySummary(summary) => {
+                if now.is_some_and(|now| !summary.is_for(now)) {
+                    return;
+                }
+
+                self.status.solar_production_hourly = summary.solar_production;
+                self.status.grid_import_hourly = summary.grid_import;
+                self.status.grid_export_hourly = summary.grid_export;
+                if let Some(now) = now {
+                    self.status.solar_production_hourly.mark_restored(now);
+                    self.status.grid_import_hourly.mark_restored(now);
+                    self.status.grid_export_hourly.mark_restored(now);
+                } else {
+                    self.status
+                        .solar_production_hourly
+                        .mark_restored_without_time();
+                    self.status.grid_import_hourly.mark_restored_without_time();
+                    self.status.grid_export_hourly.mark_restored_without_time();
                 }
             }
         }
@@ -450,6 +499,72 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn restores_summary_and_continues_current_hour_updates() {
+        let mut dashboard = Dashboard::default();
+        let mut solar = HourlyData::default();
+        solar.values_at_hour_start[10] = 21.5;
+        solar.values[10] = 1200.0;
+        let mut grid_import = HourlyData::default();
+        grid_import.values_at_hour_start[10] = 4.0;
+        grid_import.values[10] = 500.0;
+        let mut grid_export = HourlyData::default();
+        grid_export.values_at_hour_start[10] = 8.0;
+        grid_export.values[10] = 700.0;
+
+        dashboard.apply(
+            Update::DailySummary(DailySummary {
+                date: jiff::civil::date(2026, 9, 9),
+                solar_production: solar,
+                grid_import,
+                grid_export,
+            }),
+            MORNING,
+        );
+
+        assert_eq!(dashboard.status.solar_production_hourly.values[10], 1200.0);
+        dashboard.apply(
+            Update::Solar(SolarData {
+                energy_today: 22.5,
+                ..SolarData::default()
+            }),
+            MORNING,
+        );
+
+        assert_eq!(dashboard.status.solar_today, 22.5);
+        assert_eq!(
+            dashboard
+                .status
+                .solar_production_hourly
+                .values_at_hour_start[10],
+            21.5
+        );
+        assert_eq!(
+            dashboard.status.solar_production_hourly.last_update,
+            Some(MORNING)
+        );
+        assert!(dashboard.status.solar_production_hourly.baseline_present[10]);
+        assert_eq!(dashboard.status.solar_production_hourly.values[10], 1000.0);
+        assert_eq!(dashboard.status.grid_import_hourly.values[10], 500.0);
+        assert_eq!(dashboard.status.grid_export_hourly.values[10], 700.0);
+    }
+
+    #[test]
+    fn ignores_summary_from_another_day() {
+        let mut dashboard = Dashboard::default();
+        dashboard.status.solar_production_hourly.values[3] = 42.0;
+        dashboard.apply(
+            Update::DailySummary(DailySummary {
+                date: jiff::civil::date(2026, 9, 8),
+                solar_production: HourlyData::default(),
+                grid_import: HourlyData::default(),
+                grid_export: HourlyData::default(),
+            }),
+            MORNING,
+        );
+        assert_eq!(dashboard.status.solar_production_hourly.values[3], 42.0);
     }
 
     #[test]
