@@ -8,6 +8,7 @@ use display_interface_spi::SPIInterface;
 use embassy_executor::Spawner;
 use embassy_futures::join::{join, join5};
 use embassy_net::StackResources;
+use embassy_time::Timer;
 use embedded_hal_bus::spi::ExclusiveDevice;
 use energydisplay_firmware::{
     MAX_POST_BOOT_RUST_ALLOCATION_SIZE, board, clock, config, display, logging, panic_store,
@@ -26,7 +27,7 @@ use esp_hal::{
         master::{Config as SpiConfig, Spi},
     },
     time::Rate,
-    timer::timg::TimerGroup,
+    timer::timg::{MwdtStage, TimerGroup},
 };
 use esp_radio::wifi::{
     AuthenticationMethodConfig, Config as WifiConfig, ControllerConfig, Interface, WifiController,
@@ -66,6 +67,10 @@ async fn main(spawner: Spawner) -> ! {
     esp_alloc::heap_allocator!(#[ram(reclaimed)] size: board::RADIO_HEAP_SIZE);
 
     let timer_group = TimerGroup::new(peripherals.TIMG0);
+    let mut watchdog = timer_group.wdt;
+    watchdog.set_timeout(MwdtStage::Stage0, esp_hal::time::Duration::from_secs(10));
+    watchdog.enable();
+    info!("watchdog: hardware reset timeout=10s");
     esp_rtos::start(timer_group.timer0, peripherals.FROM_CPU_INTR0);
 
     let button_config = InputConfig::default().with_pull(Pull::Up);
@@ -252,12 +257,19 @@ async fn main(spawner: Spawner) -> ! {
         }
     };
 
+    let watchdog_task = async move {
+        loop {
+            watchdog.feed();
+            Timer::after_secs(1).await;
+        }
+    };
+
     join5(
         net::runner_task(runner),
         net::connection_task(controller),
         join(net::status_task(stack), clock::run(stack)),
         mqtt::run(stack, mqtt_buffers),
-        display_task,
+        join(display_task, watchdog_task),
     )
     .await;
 
