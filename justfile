@@ -27,8 +27,8 @@ firmware-build-debug:
 firmware-ota-image: firmware-build
     espflash save-image --chip esp32s3 --flash-size 16mb --partition-table firmware/partitions.csv --target-app-partition ota_0 target/{{esp_target}}/release/energydisplay-firmware target/{{esp_target}}/release/energydisplay-firmware.bin
 
-ota-push host: firmware-ota-image
-    python3 tools/ota_push.py "{{host}}" target/{{esp_target}}/release/energydisplay-firmware.bin
+ota-push: firmware-ota-image
+    python3 tools/ota_push.py energydisplay.fritz.box target/{{esp_target}}/release/energydisplay-firmware.bin
 
 firmware-flash:
     build_id="$(date -u +%Y%m%dT%H%M%S.%NZ)"; echo "Building firmware build_id=$build_id"; ENERGY_DISPLAY_BUILD_ID="$build_id" cargo build -p energydisplay-firmware --target {{esp_target}} --release --locked -Z build-std=core,alloc; sha256sum target/{{esp_target}}/release/energydisplay-firmware; espflash flash --partition-table firmware/partitions.csv --target-app-partition factory --erase-parts otadata --monitor target/{{esp_target}}/release/energydisplay-firmware
