@@ -42,7 +42,7 @@ esp_bootloader_esp_idf::esp_app_desc!();
 // MQTT, SNTP, structured-log HTTP, and OTA can all run alongside DHCP. Keep the
 // socket set in stable static storage outside the protected main-stack region.
 #[ram(reclaimed)]
-static mut NETWORK_RESOURCES: MaybeUninit<StackResources<5>> = MaybeUninit::uninit();
+static mut NETWORK_RESOURCES: MaybeUninit<StackResources<6>> = MaybeUninit::uninit();
 static MQTT_BUFFERS: StaticCell<mqtt::Buffers> = StaticCell::new();
 static STRUCTURED_LOG_BUFFERS: StaticCell<structured_log::Buffers> = StaticCell::new();
 #[ram(reclaimed)]

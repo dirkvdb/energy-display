@@ -14,6 +14,7 @@ use embedded_graphics_simulator::{
     sdl2::Keycode,
 };
 use energydisplay_firmware::{clock, tasks::mqtt};
+use heapless::Vec;
 use static_cell::StaticCell;
 
 #[cfg(test)]
@@ -22,7 +23,7 @@ const TAP_NAME: &str = "tap-energy";
 const UI_POLL_INTERVAL: Duration = Duration::from_millis(16);
 
 static EXECUTOR: StaticCell<Executor> = StaticCell::new();
-static NETWORK_RESOURCES: StaticCell<StackResources<2>> = StaticCell::new();
+static NETWORK_RESOURCES: StaticCell<StackResources<3>> = StaticCell::new();
 static MQTT_BUFFERS: StaticCell<mqtt::Buffers> = StaticCell::new();
 
 fn main() {
@@ -51,9 +52,11 @@ async fn application_task(spawner: Spawner) {
     let device = TunTapDevice::new(TAP_NAME).unwrap_or_else(|error| {
         panic!("failed to open {TAP_NAME}; run `just simulator-tap-up`: {error}")
     });
+    let mut dns_servers = Vec::new();
+    dns_servers.push(Ipv4Address::new(192, 168, 1, 13)).unwrap();
     let config = Config::ipv4_static(StaticConfigV4 {
         address: Ipv4Cidr::new(Ipv4Address::new(192, 168, 69, 2), 24),
-        dns_servers: Default::default(),
+        dns_servers,
         gateway: Some(Ipv4Address::new(192, 168, 69, 1)),
     });
     let (stack, runner) = embassy_net::new(

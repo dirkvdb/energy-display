@@ -5,12 +5,13 @@ use dashboard_core::{
     routing::{LIVE_SUBSCRIPTIONS, SUMMARY_TOPIC, decode_update},
 };
 use embassy_futures::select::{Either, Either4, select, select4};
-use embassy_net::{Stack, tcp::TcpSocket};
+use embassy_net::{Stack, dns::DnsSocket, tcp::TcpSocket};
 use embassy_sync::{
     blocking_mutex::raw::CriticalSectionRawMutex,
     channel::{Channel, TrySendError},
 };
 use embassy_time::{Duration, Instant, Ticker, Timer, with_timeout};
+use embedded_nal_async::{AddrType, Dns};
 use jiff::tz::TimeZone;
 use rust_mqtt::{
     Bytes,
@@ -123,11 +124,47 @@ pub async fn run(stack: Stack<'static>, buffers: &'static mut Buffers) {
 
     loop {
         stack.wait_config_up().await;
+        let dns = DnsSocket::new(stack);
+        let broker_address = match with_timeout(
+            CONNECT_TIMEOUT,
+            dns.get_host_by_name(config::MQTT_BROKER_HOST, AddrType::IPv4),
+        )
+        .await
+        {
+            Ok(Ok(core::net::IpAddr::V4(address))) => address,
+            Ok(Ok(_)) => {
+                log::warn!(
+                    "mqtt: DNS lookup for {} returned IPv6",
+                    config::MQTT_BROKER_HOST
+                );
+                Timer::after(RECONNECT_DELAY).await;
+                continue;
+            }
+            Ok(Err(error)) => {
+                log::warn!(
+                    "mqtt: DNS lookup for {} failed: {:?}",
+                    config::MQTT_BROKER_HOST,
+                    error
+                );
+                Timer::after(RECONNECT_DELAY).await;
+                continue;
+            }
+            Err(_) => {
+                log::warn!(
+                    "mqtt: DNS lookup for {} timed out",
+                    config::MQTT_BROKER_HOST
+                );
+                Timer::after(RECONNECT_DELAY).await;
+                continue;
+            }
+        };
         mqtt_log!(
-            "mqtt: connecting to {}:{}",
-            config::MQTT_BROKER_ADDRESS,
+            "mqtt: connecting to {} ({}):{}",
+            config::MQTT_BROKER_HOST,
+            broker_address,
             config::MQTT_PORT
         );
+        drop(dns);
 
         let mut socket = TcpSocket::new(stack, &mut buffers.tcp_rx, &mut buffers.tcp_tx);
         socket.set_timeout(Some(SOCKET_TIMEOUT));
@@ -136,7 +173,7 @@ pub async fn run(stack: Stack<'static>, buffers: &'static mut Buffers) {
 
         match with_timeout(
             CONNECT_TIMEOUT,
-            socket.connect((config::MQTT_BROKER_ADDRESS, config::MQTT_PORT)),
+            socket.connect((broker_address, config::MQTT_PORT)),
         )
         .await
         {

@@ -1094,6 +1094,7 @@ dependencies = [
  "embedded-graphics-simulator",
  "energydisplay-firmware",
  "env_logger",
+ "heapless 0.9.3",
  "log",
  "static_cell",
 ]

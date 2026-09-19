@@ -8,7 +8,7 @@ pub const OTA_PORT: u16 = 3232;
 pub const NTP_SERVER_ADDRESS: Ipv4Addr = Ipv4Addr::new(192, 168, 1, 1);
 
 pub const HOME_SERVER_ADDRESS: Ipv4Addr = Ipv4Addr::new(192, 168, 1, 13);
-pub const MQTT_BROKER_ADDRESS: Ipv4Addr = HOME_SERVER_ADDRESS;
+pub const MQTT_BROKER_HOST: &str = "mqtt.lan";
 pub const MQTT_PORT: u16 = 1883;
 #[cfg(not(feature = "sim"))]
 pub const MQTT_CLIENT_ID: &str = "energydisplay";
