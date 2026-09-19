@@ -3,6 +3,8 @@ use embassy_time::{Duration, Timer};
 use esp_hal::gpio::Input;
 use log::info;
 
+use super::mqtt;
+
 const DEBOUNCE_INTERVAL: Duration = Duration::from_millis(20);
 
 /// Waits for active-low button interrupts and logs debounced presses.
@@ -10,7 +12,7 @@ const DEBOUNCE_INTERVAL: Duration = Duration::from_millis(20);
 pub async fn task(mut boot: Input<'static>, mut key: Input<'static>) -> ! {
     info!("buttons: monitoring BOOT GPIO0 (pressed=low)");
     info!("buttons: monitoring KEY GPIO18 (pressed=low)");
-    join(monitor(&mut boot, "BOOT"), monitor(&mut key, "KEY")).await;
+    join(monitor(&mut boot, "BOOT"), monitor_key(&mut key)).await;
     unreachable!()
 }
 
@@ -21,6 +23,20 @@ async fn monitor(button: &mut Input<'_>, name: &str) -> ! {
 
         if button.is_low() {
             info!("button: {} pressed", name);
+            button.wait_for_high().await;
+            Timer::after(DEBOUNCE_INTERVAL).await;
+        }
+    }
+}
+
+async fn monitor_key(button: &mut Input<'_>) -> ! {
+    loop {
+        button.wait_for_falling_edge().await;
+        Timer::after(DEBOUNCE_INTERVAL).await;
+
+        if button.is_low() {
+            info!("button: KEY pressed");
+            mqtt::queue_ovenplaat_dimmer_toggle();
             button.wait_for_high().await;
             Timer::after(DEBOUNCE_INTERVAL).await;
         }

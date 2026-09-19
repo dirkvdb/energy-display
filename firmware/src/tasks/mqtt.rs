@@ -4,7 +4,7 @@ use dashboard_core::{
     model::{HourlyData, Update},
     routing::{LIVE_SUBSCRIPTIONS, SUMMARY_TOPIC, decode_update},
 };
-use embassy_futures::select::{Either, Either3, select, select3};
+use embassy_futures::select::{Either, Either4, select, select4};
 use embassy_net::{Stack, tcp::TcpSocket};
 use embassy_sync::{
     blocking_mutex::raw::CriticalSectionRawMutex,
@@ -50,6 +50,20 @@ pub const RECEIVE_SCRATCH_BYTES: usize = 4096;
 pub const UPDATE_QUEUE_DEPTH: usize = 8;
 
 pub static UPDATES: Channel<CriticalSectionRawMutex, Update, UPDATE_QUEUE_DEPTH> = Channel::new();
+
+const OVENPLAAT_DIMMER_TOPIC: &str = "home/zigbee/OvenplaatDimmer/set";
+const OVENPLAAT_DIMMER_TOGGLE_PAYLOAD: &[u8] = br#"{"state":"TOGGLE"}"#;
+const OVENPLAAT_DIMMER_COMMAND_QUEUE_DEPTH: usize = 8;
+
+static OVENPLAAT_DIMMER_COMMANDS: Channel<
+    CriticalSectionRawMutex,
+    (),
+    OVENPLAAT_DIMMER_COMMAND_QUEUE_DEPTH,
+> = Channel::new();
+
+pub fn queue_ovenplaat_dimmer_toggle() {
+    let _ = OVENPLAAT_DIMMER_COMMANDS.try_send(());
+}
 
 const SUMMARY_PAYLOAD_BYTES: usize = RECEIVE_SCRATCH_BYTES;
 const SUMMARY_PUBLICATION_QUEUE_DEPTH: usize = 1;
@@ -225,14 +239,15 @@ async fn run_session<'a>(
 
     let mut ping = Ticker::every(PING_INTERVAL);
     loop {
-        match select3(
+        match select4(
             SUMMARY_PUBLICATIONS.receive(),
+            OVENPLAAT_DIMMER_COMMANDS.receive(),
             client.poll_header(),
             ping.next(),
         )
         .await
         {
-            Either3::First(summary) => {
+            Either4::First(summary) => {
                 if !summary_ready_to_publish(&mut awaiting_restored_snapshot, &summary) {
                     continue;
                 }
@@ -243,7 +258,13 @@ async fn run_session<'a>(
                     return Err(error);
                 }
             }
-            Either3::Second(header) => {
+            Either4::Second(()) => {
+                if let Err(error) = publish_ovenplaat_dimmer_toggle(client).await {
+                    queue_ovenplaat_dimmer_toggle();
+                    return Err(error);
+                }
+            }
+            Either4::Third(header) => {
                 let event = client.poll_body(header?).await?;
                 let update = decode_event(event);
 
@@ -258,7 +279,7 @@ async fn run_session<'a>(
                     None => {}
                 }
             }
-            Either3::Third(_) => client.ping().await?,
+            Either4::Fourth(_) => client.ping().await?,
         }
     }
 }
@@ -454,6 +475,18 @@ async fn publish_summary_if_needed<'a>(
     }
     *last_summary_update = Some(snapshot.timestamp);
     mqtt_log!("mqtt: published daily summary at {}", timestamp);
+    Ok(())
+}
+
+async fn publish_ovenplaat_dimmer_toggle<'a>(
+    client: &mut MqttClient<'a>,
+) -> Result<(), MqttError<'a>> {
+    let topic = TopicName::new_unchecked(MqttString::from_str_unchecked(OVENPLAAT_DIMMER_TOPIC));
+    let options = PublicationOptions::new(TopicReference::Name(topic)).at_least_once();
+    client
+        .publish(&options, Bytes::from(OVENPLAAT_DIMMER_TOGGLE_PAYLOAD))
+        .await?;
+    mqtt_log!("mqtt: toggled {}", OVENPLAAT_DIMMER_TOPIC);
     Ok(())
 }
 
