@@ -1,17 +1,17 @@
-use core::{fmt::Write as _, net::IpAddr};
+use core::fmt::Write as _;
 
 use embassy_net::{
     Stack,
+    dns::DnsSocket,
     tcp::client::{TcpClient, TcpClientState},
 };
 use embassy_time::{Duration, Timer, with_timeout};
-use embedded_nal_async::{AddrType, Dns};
 use reqwless::{
     client::HttpClient,
     request::{Method, RequestBuilder},
 };
 
-use crate::{config, logging, panic_store};
+use crate::{logging, panic_store};
 
 const VICTORIA_LOGS_PORT: u16 = 9428;
 const VICTORIA_PATH: &str = "/insert/jsonline?_stream_fields=app_name,hostname,proc_id";
@@ -22,33 +22,6 @@ const HTTP_HEADER_CAPACITY: usize = 512;
 const TCP_TX_SIZE: usize = 256;
 const TCP_RX_SIZE: usize = 1024;
 const VICTORIA_BODY_CAPACITY: usize = 1600;
-
-#[derive(Debug)]
-enum FixedIpDnsError {
-    ReverseLookupUnsupported,
-}
-
-struct FixedIpDns;
-
-impl Dns for FixedIpDns {
-    type Error = FixedIpDnsError;
-
-    async fn get_host_by_name(
-        &self,
-        _host: &str,
-        _addr_type: AddrType,
-    ) -> Result<IpAddr, Self::Error> {
-        Ok(IpAddr::V4(config::HOME_SERVER_ADDRESS))
-    }
-
-    async fn get_host_by_address(
-        &self,
-        _addr: IpAddr,
-        _result: &mut [u8],
-    ) -> Result<usize, Self::Error> {
-        Err(FixedIpDnsError::ReverseLookupUnsupported)
-    }
-}
 
 pub struct Buffers {
     tcp_state: TcpClientState<1, TCP_TX_SIZE, TCP_RX_SIZE>,
@@ -72,8 +45,7 @@ impl Buffers {
     pub fn initialize(&mut self) {
         write!(
             self.victoria_url,
-            "http://{}:{}{VICTORIA_PATH}",
-            config::HOME_SERVER_ADDRESS,
+            "http://logs.lan:{}{VICTORIA_PATH}",
             VICTORIA_LOGS_PORT
         )
         .expect("Victoria Logs URL exceeds capacity");
@@ -89,7 +61,7 @@ impl Default for Buffers {
 /// Forwards warning and error records to Victoria Logs as JSON Lines.
 #[embassy_executor::task]
 pub async fn task(stack: Stack<'static>, buffers: &'static mut Buffers) -> ! {
-    let dns = FixedIpDns;
+    let dns = DnsSocket::new(stack);
     let mut failed = false;
 
     loop {
