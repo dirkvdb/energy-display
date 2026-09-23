@@ -19,7 +19,10 @@ use rust_mqtt::{
     client::{
         Client, MqttError,
         event::Event,
-        options::{ConnectOptions, PublicationOptions, SubscriptionOptions, TopicReference},
+        options::{
+            ConnectOptions, PublicationOptions, SubscriptionOptions, TopicReference,
+            UnsubscriptionOptions,
+        },
     },
     config::{KeepAlive, SessionExpiryInterval},
     session::Session,
@@ -45,6 +48,9 @@ const MAX_SUBSCRIBES: usize = 9;
 const RECEIVE_MAXIMUM: usize = 8;
 const SEND_MAXIMUM: usize = 1;
 const MAX_SUBSCRIPTION_IDENTIFIERS: usize = 0;
+const MAX_USER_PROPERTIES: usize = 0;
+const MAX_INCOMING_TOPIC_ALIASES: usize = 0;
+const MAX_OUTGOING_TOPIC_ALIASES: usize = 0;
 
 pub const TCP_BUFFER_BYTES: usize = 4096;
 pub const RECEIVE_SCRATCH_BYTES: usize = 4096;
@@ -108,6 +114,7 @@ impl Buffers {
 }
 
 type MqttClient<'a> = Client<
+    'static,
     'a,
     TcpSocket<'a>,
     BumpBuffer<'a>,
@@ -115,8 +122,17 @@ type MqttClient<'a> = Client<
     RECEIVE_MAXIMUM,
     SEND_MAXIMUM,
     MAX_SUBSCRIPTION_IDENTIFIERS,
+    MAX_USER_PROPERTIES,
+    MAX_INCOMING_TOPIC_ALIASES,
+    MAX_OUTGOING_TOPIC_ALIASES,
 >;
-type MqttSession = Session<RECEIVE_MAXIMUM, SEND_MAXIMUM>;
+type MqttSession = Session<
+    MAX_SUBSCRIBES,
+    RECEIVE_MAXIMUM,
+    SEND_MAXIMUM,
+    MAX_INCOMING_TOPIC_ALIASES,
+    MAX_OUTGOING_TOPIC_ALIASES,
+>;
 
 pub async fn run(stack: Stack<'static>, buffers: &'static mut Buffers) {
     let mut session = MqttSession::default();
@@ -237,7 +253,7 @@ pub async fn run(stack: Stack<'static>, buffers: &'static mut Buffers) {
             Err(error) => log::warn!("mqtt: session failed: {:?}", error),
         }
 
-        client.abort().await;
+        let _ = client.abort().await;
         session = client.session().clone();
         mqtt_log!("mqtt: reconnecting in {}s", RECONNECT_DELAY.as_secs());
         Timer::after(RECONNECT_DELAY).await;
@@ -248,7 +264,7 @@ async fn run_session<'a>(
     client: &mut MqttClient<'a>,
     session_present: bool,
     last_summary_update: &mut Option<jiff::Timestamp>,
-) -> Result<core::convert::Infallible, MqttError<'a>> {
+) -> Result<core::convert::Infallible, MqttError<'a, MAX_USER_PROPERTIES>> {
     clear_summary_publications();
     if session_present {
         mqtt_log!("mqtt: resuming existing session");
@@ -329,7 +345,7 @@ struct RestoreObservation {
 
 async fn restore_daily_summary<'a>(
     client: &mut MqttClient<'a>,
-) -> Result<RestoreObservation, MqttError<'a>> {
+) -> Result<RestoreObservation, MqttError<'a, MAX_USER_PROPERTIES>> {
     let deadline = Instant::now().saturating_add(SUMMARY_RESTORE_TIMEOUT);
     loop {
         let header = match select(Timer::at(deadline), client.poll_header()).await {
@@ -358,10 +374,10 @@ async fn restore_daily_summary<'a>(
 async fn request_subscription<'a>(
     client: &mut MqttClient<'a>,
     topic: &'static str,
-) -> Result<PacketIdentifier, MqttError<'a>> {
+) -> Result<PacketIdentifier, MqttError<'a, MAX_USER_PROPERTIES>> {
     let filter = TopicFilter::new_unchecked(MqttString::from_str_unchecked(topic));
     let packet_identifier = client
-        .subscribe(filter, SubscriptionOptions::new().exactly_once())
+        .subscribe(filter, &SubscriptionOptions::new().exactly_once())
         .await?;
     mqtt_log!(
         "mqtt: requested subscription to {} (packet_id={:?})",
@@ -374,9 +390,11 @@ async fn request_subscription<'a>(
 async fn request_unsubscribe<'a>(
     client: &mut MqttClient<'a>,
     topic: &'static str,
-) -> Result<(), MqttError<'a>> {
+) -> Result<(), MqttError<'a, MAX_USER_PROPERTIES>> {
     let filter = TopicFilter::new_unchecked(MqttString::from_str_unchecked(topic));
-    let packet_identifier = client.unsubscribe(filter).await?;
+    let packet_identifier = client
+        .unsubscribe(filter, &UnsubscriptionOptions::new())
+        .await?;
     mqtt_log!(
         "mqtt: requested unsubscription from {} (packet_id={:?})",
         topic,
@@ -468,7 +486,7 @@ async fn publish_summary_if_needed<'a>(
     client: &mut MqttClient<'a>,
     update: SummaryUpdate,
     last_summary_update: &mut Option<jiff::Timestamp>,
-) -> Result<(), MqttError<'a>> {
+) -> Result<(), MqttError<'a, MAX_USER_PROPERTIES>> {
     let snapshot = update.snapshot;
     if let Some(received_at) = update.summary_received_at {
         *last_summary_update = Some(received_at);
@@ -498,9 +516,9 @@ async fn publish_summary_if_needed<'a>(
         .retain();
     let pending = client
         .session()
-        .pending_client_publishes
+        .outbound_publishes
         .first()
-        .map(|publication| publication.packet_identifier);
+        .map(|publication| publication.0);
     if let Some(packet_identifier) = pending {
         client
             .republish(packet_identifier, &options, Bytes::from(&payload[..length]))
@@ -517,7 +535,7 @@ async fn publish_summary_if_needed<'a>(
 
 async fn publish_ovenplaat_dimmer_toggle<'a>(
     client: &mut MqttClient<'a>,
-) -> Result<(), MqttError<'a>> {
+) -> Result<(), MqttError<'a, MAX_USER_PROPERTIES>> {
     let topic = TopicName::new_unchecked(MqttString::from_str_unchecked(OVENPLAAT_DIMMER_TOPIC));
     let options = PublicationOptions::new(TopicReference::Name(topic)).at_least_once();
     client
@@ -533,7 +551,9 @@ fn same_utc_hour(left: jiff::Timestamp, right: jiff::Timestamp) -> bool {
     left.date() == right.date() && left.hour() == right.hour()
 }
 
-fn decode_event(event: Event<'_, MAX_SUBSCRIPTION_IDENTIFIERS>) -> Option<Update> {
+fn decode_event(
+    event: Event<'_, MAX_SUBSCRIPTION_IDENTIFIERS, MAX_USER_PROPERTIES>,
+) -> Option<Update> {
     let publication = match event {
         Event::Publish(publication) => publication,
         Event::Suback(ack) => {
@@ -555,7 +575,7 @@ fn decode_event(event: Event<'_, MAX_SUBSCRIPTION_IDENTIFIERS>) -> Option<Update
         _ => return None,
     };
 
-    let topic = publication.topic.as_ref().as_str();
+    let topic = publication.topic.name()?.as_ref().as_str();
     match decode_update(topic, publication.message.as_bytes()) {
         Ok(update) => Some(update),
         Err(dashboard_core::routing::DecodeError::IgnoredTopic) => None,
