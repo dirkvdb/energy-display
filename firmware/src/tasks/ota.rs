@@ -8,7 +8,7 @@ use esp_bootloader_esp_idf::{
     partitions::{self, AppPartitionSubType, Error as PartitionError, PartitionType},
 };
 use esp_storage::{FlashStorage, FlashStorageError};
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use log::{error, info, warn};
 use sha2::{Digest, Sha256};
 
@@ -142,7 +142,7 @@ async fn receive_update(
 
     let mut mac = HmacSha256::new_from_slice(config::OTA_PASSWORD.as_bytes())
         .map_err(|_| UpdateError::Authentication)?;
-    Mac::update(&mut mac, &header[..MAC_OFFSET]);
+    mac.update(&header[..MAC_OFFSET]);
     mac.verify_slice(&header[MAC_OFFSET..])
         .map_err(|_| UpdateError::Authentication)?;
 

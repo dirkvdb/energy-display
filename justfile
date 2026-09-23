@@ -19,10 +19,10 @@ firmware-check:
     cargo check -p energydisplay-firmware --target {{esp_target}} --locked -Z build-std=core,alloc
 
 firmware-build:
-    cargo build -p energydisplay-firmware --target {{esp_target}} --release --locked -Z build-std=core,alloc
+    cargo build -p energydisplay-firmware --target {{esp_target}} --release -Z build-std=core,alloc
 
 firmware-build-debug:
-    cargo build -p energydisplay-firmware --target {{esp_target}} --features=debug --release --locked -Z build-std=core,alloc
+    cargo build -p energydisplay-firmware --target {{esp_target}} --features=debug --release -Z build-std=core,alloc
 
 firmware-ota-image: firmware-build
     espflash save-image --chip esp32s3 --flash-size 16mb --partition-table firmware/partitions.csv --target-app-partition ota_0 target/{{esp_target}}/release/energydisplay-firmware target/{{esp_target}}/release/energydisplay-firmware.bin
